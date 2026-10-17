@@ -190,10 +190,10 @@ export function ExportPDF({ leads, searchParams }: ExportPDFProps) {
     <button
       onClick={generatePDF}
       disabled={leads.length === 0}
-      className="bg-zinc-950 text-[#E5FF00] font-black text-lg uppercase tracking-wider border-4 border-zinc-950 py-4 px-8 shadow-[8px_8px_0_0_#E5FF00] hover:shadow-none hover:translate-y-2 hover:translate-x-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-4 cursor-pointer"
+      className="w-full sm:w-auto min-h-[48px] bg-zinc-950 text-[#E5FF00] font-black text-xs sm:text-sm md:text-base uppercase tracking-wider border-3 md:border-4 border-zinc-950 py-3 px-5 md:py-3.5 md:px-6 shadow-[4px_4px_0_0_#E5FF00] md:shadow-[6px_6px_0_0_#E5FF00] hover:shadow-none active:translate-y-0.5 transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 cursor-pointer"
     >
-      <FileDown size={24} strokeWidth={3} />
-      Exportar PDF
+      <FileDown size={20} strokeWidth={3} className="shrink-0" />
+      <span>Exportar PDF</span>
     </button>
   );
 }
