@@ -182,9 +182,12 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
             });
           });
         }
+      } else {
+        setServiceStatus(prev => ({ ...prev, connected: false, logged_in: false, phone: undefined, push_name: undefined, jid: undefined }));
       }
     } catch (e) {
       console.error('Falha ao checar status do WhatsApp:', e);
+      setServiceStatus(prev => ({ ...prev, connected: false, logged_in: false, phone: undefined, push_name: undefined, jid: undefined }));
     } finally {
       setIsCheckingStatus(false);
     }
@@ -409,14 +412,18 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     if (!confirm('Deseja realmente desconectar a sessão atual do WhatsApp para escanear outro aparelho?')) return;
     try {
       setIsDisconnecting(true);
+      setServiceStatus(prev => ({
+        ...prev,
+        connected: false,
+        logged_in: false,
+        phone: undefined,
+        push_name: undefined,
+        jid: undefined,
+      }));
       const res = await fetch('/api/whatsapp/disconnect', { method: 'POST' });
-      if (res.ok) {
-        await fetchStatus();
-        setShowQRModal(true);
-        await fetchQR();
-      } else {
-        alert('Erro ao desconectar sessão do WhatsApp.');
-      }
+      setShowQRModal(true);
+      await fetchQR();
+      await fetchStatus();
     } catch (e: any) {
       alert('Falha na comunicação: ' + e?.message);
     } finally {

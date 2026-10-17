@@ -1073,7 +1073,8 @@ func handleDisconnect(w http.ResponseWriter, r *http.Request) {
 		appManager.client.Disconnect()
 	}
 	appManager.clearQR()
-	go appManager.startPairing(true)
+	appManager.newClient()
+	go appManager.startPairing(false)
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "WhatsApp desconectado com sucesso."})
 }
 
@@ -1093,9 +1094,10 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 	case *events.Connected:
 		log.Println("🟢 [WhatsApp] Conectado com sucesso à rede WhatsApp!")
 	case *events.LoggedOut:
-		log.Println("🔴 [WhatsApp] Sessão desconectada/deslogada pelo celular! Gerando novo QR...")
+		log.Println("🔴 [WhatsApp] Sessão desconectada/deslogada pelo celular! Resetando e gerando novo QR...")
 		s.clearQR()
-		go s.startPairing(true)
+		s.newClient()
+		go s.startPairing(false)
 	case *events.PairSuccess:
 		log.Printf("🎉 [WhatsApp] Aparelho pareado com sucesso! JID: %s", evt.ID)
 		s.clearQR()
@@ -1131,17 +1133,14 @@ func (s *ServiceManager) startPairing(reset bool) {
 		s.pairMu.Unlock()
 	}()
 
+	if reset {
+		s.newClient()
+	}
+
 	for s.ctx.Err() == nil {
 		if s.client.IsLoggedIn() {
 			return
 		}
-		if s.client.Store.ID != nil {
-			if !reset {
-				return // já pareado: o whatsmeow conclui a reconexão sozinho
-			}
-			s.newClient()
-		}
-		reset = false
 		if s.client.IsConnected() {
 			s.client.Disconnect()
 		}
