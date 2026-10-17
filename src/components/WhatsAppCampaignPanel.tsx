@@ -424,6 +424,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     qr_base64?: string;
     qr_code?: string;
     status?: string;
+    stale_session?: boolean;
   } | null>(null);
   const [isLoadingQR, setIsLoadingQR] = useState<boolean>(false);
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
@@ -548,7 +549,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         const data = await res.json();
         setQRCodeData(data);
         setQrError(null);
-        if (data.logged_in || data.connected) {
+        if (data.logged_in && data.connected) {
           fetchStatus();
         }
       } else {
@@ -567,6 +568,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     if (!confirm('Deseja realmente desconectar a sessão atual do WhatsApp para escanear outro aparelho?')) return;
     try {
       setIsDisconnecting(true);
+      setQRCodeData(null);
       setServiceStatus(prev => ({
         ...prev,
         connected: false,
@@ -575,7 +577,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         push_name: undefined,
         jid: undefined,
       }));
-      const res = await fetch('/api/whatsapp/disconnect', { method: 'POST' });
+      await fetch('/api/whatsapp/disconnect', { method: 'POST' });
       setShowQRModal(true);
       await fetchQR();
       await fetchStatus();
@@ -1092,7 +1094,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
               </h3>
             </div>
 
-            {serviceStatus.logged_in ? (
+            {serviceStatus.connected && serviceStatus.logged_in ? (
               <div className="flex flex-col items-center gap-4 py-4 sm:py-6 text-center">
                 <div className="w-16 h-16 bg-[#25D366] text-zinc-950 rounded-full flex items-center justify-center border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B]">
                   <CheckCircle2 size={40} />
@@ -1214,14 +1216,26 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                 </button>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-4 py-10 sm:py-12 text-center font-mono">
+              <div className="flex flex-col items-center gap-4 py-8 sm:py-10 text-center font-mono">
                 <RefreshCw size={36} className="animate-spin text-zinc-800" />
                 <span className="font-bold text-sm text-zinc-800 uppercase">
-                  Gerando QR Code de Pareamento...
+                  {qrCodeData?.stale_session
+                    ? 'Sessão Anterior Desconectada'
+                    : 'Gerando QR Code de Pareamento...'}
                 </span>
-                <p className="text-xs text-zinc-500 max-w-xs">
-                  Aguarde um instante enquanto o microserviço Whatsmeow estabelece o canal de autenticação.
+                <p className="text-xs text-zinc-500 max-w-sm">
+                  {qrCodeData?.stale_session
+                    ? 'O WhatsApp foi desconectado. Caso o motor no Termux esteja com uma versão anterior carregada na memória e não exiba o novo QR em instantes, reinicie apenas o motor (sem mudar o link do túnel):'
+                    : 'Aguarde um instante enquanto o microserviço Whatsmeow estabelece o canal de autenticação.'}
                 </p>
+                {qrCodeData?.stale_session && (
+                  <div className="w-full bg-amber-50 border-2 border-amber-500 p-3 text-left font-mono text-[11px] text-amber-950 flex flex-col gap-1.5">
+                    <span className="font-black uppercase">No Termux (mantém o mesmo link Cloudflare):</span>
+                    <code className="bg-amber-200 px-2 py-1 font-bold text-zinc-950 select-all">
+                      pm2 restart whatsapp-engine
+                    </code>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1364,7 +1378,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
           <div className="bg-zinc-900 border-2 border-zinc-700 px-3 sm:px-4 py-2.5 sm:py-3 flex flex-col gap-1 min-w-0 sm:min-w-[200px]">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono uppercase text-zinc-400 font-bold truncate">WhatsApp Core</span>
-              {serviceStatus.logged_in && (
+              {serviceStatus.connected && serviceStatus.logged_in && (
                 <button
                   type="button"
                   onClick={handleDisconnect}
@@ -1378,7 +1392,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
             </div>
 
             <div className="flex items-center gap-2 mt-0.5">
-              {serviceStatus.logged_in ? (
+              {serviceStatus.connected && serviceStatus.logged_in ? (
                 <div className="flex flex-col min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-xs font-black uppercase text-[#25D366] flex items-center gap-1">

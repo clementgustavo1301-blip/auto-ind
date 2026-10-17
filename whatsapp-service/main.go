@@ -726,14 +726,18 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	hasQR := appManager.qrCodeBase64 != ""
 	appManager.qrMu.RUnlock()
 
+	connected := appManager.client != nil && appManager.client.IsConnected()
+	hasStoreID := appManager.client != nil && appManager.client.Store != nil && appManager.client.Store.ID != nil
+	loggedIn := connected && appManager.client.IsLoggedIn() && hasStoreID
+
 	var jidStr string
-	if appManager.client != nil && appManager.client.Store != nil && appManager.client.Store.ID != nil {
+	if loggedIn {
 		jidStr = appManager.client.Store.ID.String()
 	}
 
 	resp := StatusResponse{
-		Connected:     appManager.client != nil && appManager.client.IsConnected(),
-		LoggedIn:      appManager.client != nil && appManager.client.IsLoggedIn(),
+		Connected:     connected,
+		LoggedIn:      loggedIn,
 		HasQR:         hasQR,
 		JID:           jidStr,
 		SentToday:     cfg.SentToday,
@@ -752,11 +756,13 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 	qrRaw := appManager.qrCodeRaw
 	appManager.qrMu.RUnlock()
 
-	loggedIn := appManager.client != nil && appManager.client.IsLoggedIn()
+	connected := appManager.client != nil && appManager.client.IsConnected()
+	hasStoreID := appManager.client != nil && appManager.client.Store != nil && appManager.client.Store.ID != nil
+	loggedIn := connected && appManager.client.IsLoggedIn() && hasStoreID
 
 	// Auto-recuperação: sem login e sem QR ativo -> reinicia o pareamento
 	// (só quando não há aparelho pareado; após o pareamento o whatsmeow reconecta sozinho)
-	if !loggedIn && qrB64 == "" && appManager.client != nil && appManager.client.Store.ID == nil {
+	if !loggedIn && qrB64 == "" && appManager.client != nil && !hasStoreID {
 		go appManager.startPairing(false)
 	}
 
@@ -764,6 +770,7 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("format") == "json" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
+			"connected": connected,
 			"logged_in": loggedIn,
 			"has_qr":    qrB64 != "",
 			"qr_code":   qrRaw,
@@ -959,7 +966,7 @@ func handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loggedIn := appManager.client != nil && appManager.client.IsLoggedIn()
+	loggedIn := appManager.client != nil && appManager.client.IsConnected() && appManager.client.IsLoggedIn() && appManager.client.Store != nil && appManager.client.Store.ID != nil
 	if !loggedIn {
 		_ = json.NewEncoder(w).Encode(CheckResponse{
 			Connected: false,
@@ -1067,15 +1074,25 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 func handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if appManager.client != nil {
-		if appManager.client.IsLoggedIn() {
-			_ = appManager.client.Logout(context.Background())
+		if appManager.client.IsConnected() && appManager.client.IsLoggedIn() {
+			logoutCtx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			_ = appManager.client.Logout(logoutCtx)
+			cancel()
+		}
+		if appManager.client.Store != nil && appManager.client.Store.ID != nil {
+			_ = appManager.client.Store.Delete(context.Background())
 		}
 		appManager.client.Disconnect()
 	}
 	appManager.clearQR()
 	appManager.newClient()
 	go appManager.startPairing(false)
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "WhatsApp desconectado com sucesso."})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":   true,
+		"connected": false,
+		"logged_in": false,
+		"message":   "WhatsApp desconectado com sucesso.",
+	})
 }
 
 // ============================================================================
@@ -1109,6 +1126,9 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 // newClient cria um dispositivo limpo (necessário após logout, pois o anterior é invalidado)
 func (s *ServiceManager) newClient() {
 	if s.client != nil {
+		if s.client.Store != nil && s.client.Store.ID != nil {
+			_ = s.client.Store.Delete(context.Background())
+		}
 		s.client.Disconnect()
 		s.client.RemoveEventHandlers()
 	}
@@ -1138,7 +1158,7 @@ func (s *ServiceManager) startPairing(reset bool) {
 	}
 
 	for s.ctx.Err() == nil {
-		if s.client.IsLoggedIn() {
+		if s.client.IsConnected() && s.client.IsLoggedIn() && s.client.Store != nil && s.client.Store.ID != nil {
 			return
 		}
 		if s.client.IsConnected() {

@@ -111,6 +111,8 @@ export async function sendWhatsAppMessage(
   }
 }
 
+let forceDisconnected = false;
+
 /**
  * Consulta o status da conexão do WhatsApp e limites diários
  */
@@ -122,7 +124,26 @@ export async function getWhatsAppStatus(): Promise<WhatsAppStatusResponse | null
     });
 
     if (!res.ok) return null;
-    return (await res.json()) as WhatsAppStatusResponse;
+    const raw = (await res.json()) as WhatsAppStatusResponse;
+
+    // No whatsmeow, cli.Disconnect() derruba connected=false mas pode manter isLoggedIn=true
+    // se o dispositivo ainda não foi recriado. Só consideramos logado se ambos forem true.
+    const trulyActive = Boolean(raw.connected && raw.logged_in);
+
+    if (trulyActive && !raw.has_qr) {
+      forceDisconnected = false;
+    }
+
+    if (!trulyActive || forceDisconnected) {
+      return {
+        ...raw,
+        connected: false,
+        logged_in: false,
+        jid: undefined,
+      };
+    }
+
+    return raw;
   } catch (error) {
     console.error('Erro ao consultar status do WhatsApp:', error);
     return null;
@@ -197,6 +218,7 @@ export interface WhatsAppQRResponse {
   qr_base64?: string;
   success?: boolean;
   status?: string;
+  stale_session?: boolean;
 }
 
 /**
@@ -204,14 +226,39 @@ export interface WhatsAppQRResponse {
  */
 export async function getWhatsAppQR(): Promise<WhatsAppQRResponse | null> {
   try {
-    const res = await fetch(`${getServiceUrl()}/api/qr?format=json`, {
-      cache: 'no-store',
-      headers: { 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(5000),
-    });
+    const [qrRes, statusRes] = await Promise.all([
+      fetch(`${getServiceUrl()}/api/qr?format=json`, {
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(5000),
+      }),
+      fetch(`${getServiceUrl()}/api/status`, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => null),
+    ]);
 
-    if (!res.ok) return null;
-    return (await res.json()) as WhatsAppQRResponse;
+    if (!qrRes.ok) return null;
+    const qrData = (await qrRes.json()) as WhatsAppQRResponse;
+    const statusData = statusRes && statusRes.ok
+      ? ((await statusRes.json().catch(() => null)) as WhatsAppStatusResponse | null)
+      : null;
+
+    const isConnected = statusData ? Boolean(statusData.connected) : Boolean(qrData.connected);
+    const trulyLoggedIn = Boolean(isConnected && qrData.logged_in && !qrData.has_qr);
+
+    if (trulyLoggedIn) {
+      forceDisconnected = false;
+    }
+
+    const staleSession = Boolean(!isConnected && qrData.logged_in && !qrData.has_qr);
+
+    return {
+      ...qrData,
+      connected: trulyLoggedIn && !forceDisconnected,
+      logged_in: trulyLoggedIn && !forceDisconnected,
+      stale_session: staleSession,
+    };
   } catch (error) {
     console.error('Erro ao buscar QR code do WhatsApp:', error);
     return null;
@@ -222,11 +269,12 @@ export async function getWhatsAppQR(): Promise<WhatsAppQRResponse | null> {
  * Desconecta a sessão ativa do WhatsApp para permitir nova conexão
  */
 export async function disconnectWhatsApp(): Promise<boolean> {
+  forceDisconnected = true;
   try {
     const res = await fetch(`${getServiceUrl()}/api/disconnect`, {
       method: 'POST',
       cache: 'no-store',
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(8000),
     });
 
     return res.ok;
