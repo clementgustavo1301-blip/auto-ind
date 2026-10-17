@@ -39,7 +39,6 @@ export async function insertWhatsAppLog(log: WhatsAppLog): Promise<WhatsAppLog |
           city: log.city || null,
           category: log.category || null,
           message: log.message,
-          media_url: log.media_url || null,
           status: log.status,
           queue_id: log.queue_id || null,
           error_message: log.error_message || null,
