@@ -19,7 +19,10 @@ export async function discoverCnpjViaSearch(companyName: string, city: string, s
     url.searchParams.set('api_key', apiKey);
     url.searchParams.set('num', '5'); // Apenas os 5 primeiros resultados são suficientes
 
-    const res = await fetch(url.toString(), { cache: 'no-store' });
+    const res = await fetch(url.toString(), { 
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
     if (!res.ok) return null;
 
     const data = await res.json();

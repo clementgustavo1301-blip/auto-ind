@@ -3,7 +3,12 @@ import { scrapeLeads } from '@/lib/scraper';
 import { scrapeSerpAPI } from '@/lib/outscraper';
 import { Lead } from '@/types';
 
-const LEADS_PER_BATCH = 50;
+import { filterLeadsWithWhatsApp } from '@/lib/phone';
+
+export const maxDuration = 60;
+export const dynamic = 'force-dynamic';
+
+const LEADS_PER_BATCH = 100;
 
 function opportunityScore(lead: Lead) {
   return (!lead.website ? 10 : 0) + (lead.whatsapp ? 3 : 0) + (lead.instagram ? 1 : 0);
@@ -60,7 +65,9 @@ export async function GET(request: Request) {
     if (source === 'serpapi') {
       const result = await scrapeSerpAPI(category, city, country);
       const filtered = noSite ? result.leads.filter(l => !l.website) : result.leads;
-      const unseenLeads = filtered.filter(lead => !excludedIds.has(lead.id));
+      // Descarta números sem WhatsApp ou linhas fixas
+      const validWhatsAppLeads = await filterLeadsWithWhatsApp(filtered);
+      const unseenLeads = validWhatsAppLeads.filter(lead => !excludedIds.has(lead.id));
       return NextResponse.json({
         leads: selectBatch(unseenLeads),
         credits: result.credits,
@@ -71,13 +78,33 @@ export async function GET(request: Request) {
         headers: { 'Cache-Control': 'no-store' },
       });
     } else {
-      const leads = await scrapeLeads(category, city, country);
-      const filtered = noSite ? leads.filter(l => !l.website) : leads;
-      const unseenLeads = filtered.filter(lead => !excludedIds.has(lead.id));
+      let leads = await scrapeLeads(category, city, country);
+      let filtered = noSite ? leads.filter(l => !l.website) : leads;
+      let validWhatsAppLeads = await filterLeadsWithWhatsApp(filtered);
+
+      // Se o OpenStreetMap não contiver números móveis com WhatsApp e houver SERPAPI_KEY, resgata no Google Maps
+      let credits: number | null = null;
+      let usedSource = 'osm';
+      if (validWhatsAppLeads.length === 0 && process.env.SERPAPI_KEY) {
+        try {
+          const serpResult = await scrapeSerpAPI(category, city, country);
+          const serpFiltered = noSite ? serpResult.leads.filter(l => !l.website) : serpResult.leads;
+          const serpWhatsApp = await filterLeadsWithWhatsApp(serpFiltered);
+          if (serpWhatsApp.length > 0) {
+            validWhatsAppLeads = serpWhatsApp;
+            credits = serpResult.credits ?? null;
+            usedSource = 'serpapi';
+          }
+        } catch (e) {
+          console.warn('[LeadsRoute] Fallback OSM -> SerpAPI falhou:', e);
+        }
+      }
+
+      const unseenLeads = validWhatsAppLeads.filter(lead => !excludedIds.has(lead.id));
       return NextResponse.json({
         leads: selectBatch(unseenLeads),
-        credits: null,
-        source: 'osm',
+        credits,
+        source: usedSource,
         exhausted: excludedIds.size > 0 && unseenLeads.length === 0,
       }, {
         headers: { 'Cache-Control': 'no-store' },

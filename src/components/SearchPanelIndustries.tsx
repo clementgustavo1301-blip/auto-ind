@@ -1,6 +1,6 @@
 'use client';
 
-import { Search, MapPin, Building2, Zap, Settings, Database, Factory } from 'lucide-react';
+import { Search, MapPin, Building2, Zap, Settings, Factory, Layers } from 'lucide-react';
 import { useState } from 'react';
 
 export type IndustrySearchParams = {
@@ -174,7 +174,7 @@ export function SearchPanelIndustries({ onSearch, isLoading }: SearchPanelIndust
         {/* Configurações Finais */}
         <div className="flex flex-col gap-3 bg-zinc-200/50 p-4 border-4 border-zinc-950">
            <label className="font-mono font-bold uppercase text-sm tracking-widest text-zinc-950 flex items-center gap-2 mb-2">
-            <Database size={18} strokeWidth={3} /> 4. Parâmetros da Busca
+            <Layers size={18} strokeWidth={3} /> 4. Parâmetros da Busca
           </label>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
              <div className="flex items-center bg-white border-4 border-zinc-950">

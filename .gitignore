@@ -44,3 +44,9 @@ next-env.d.ts
 # agent configurations
 .agent/
 .agents/
+
+# whatsapp microservice
+whatsapp-service/*.db*
+whatsapp-service/*.exe
+whatsapp-service/whatsapp-service-linux-*
+

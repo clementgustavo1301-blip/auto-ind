@@ -1,4 +1,5 @@
 import { Lead } from '../types';
+import { isLikelyMobilePhone } from './phone';
 
 /**
  * SerpAPI Google Maps Scraper
@@ -26,7 +27,7 @@ export async function scrapeSerpAPI(category: string, city: string, country: str
   let allPlaces: any[] = [];
   let currentUrl = url.toString();
   let pagesFetched = 0;
-  const MAX_PAGES = 3;
+  const MAX_PAGES = 7; // Maximiza a extração (até 140 lugares) para garantir abundância pós-filtro
 
   while (pagesFetched < MAX_PAGES) {
     console.log(`[SerpAPI] Buscando página ${pagesFetched + 1}...`);
@@ -70,11 +71,28 @@ export async function scrapeSerpAPI(category: string, city: string, country: str
   console.log(`[SerpAPI] ${allPlaces.length} resultados listados de ${pagesFetched} página(s).`);
 
   const leads: Lead[] = allPlaces.map((place: any, idx: number) => {
-    // Extrai telefone
-    const phone = place.phone || undefined;
-
-    // Extrai website
+    // Extrai telefone inicial
+    let phone = place.phone || place.unformatted_phone || undefined;
     const website = place.website || undefined;
+
+    // Se não tem telefone OU o telefone extraído é linha fixa corporativa,
+    // busca ativamente o celular/WhatsApp em canais alternativos (unformatted, links e website)
+    if (!phone || !isLikelyMobilePhone(phone)) {
+      if (place.unformatted_phone && isLikelyMobilePhone(place.unformatted_phone)) {
+        phone = place.unformatted_phone;
+      } else if (website && /(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i.test(website)) {
+        const match = website.match(/(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i);
+        if (match && match[1]) phone = '+' + match[1];
+      } else if (place.links) {
+        for (const val of Object.values(place.links)) {
+          const match = String(val).match(/(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i);
+          if (match && match[1]) {
+            phone = '+' + match[1];
+            break;
+          }
+        }
+      }
+    }
 
     // SerpAPI não retorna Instagram diretamente, mas podemos extrair dos links
     let instagram: string | undefined;

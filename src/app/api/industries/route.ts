@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { scrapeIndustries } from '@/lib/industryScraper';
 
+// Permite execução de até 60 segundos na Vercel (evita timeout padrão de 10-15s)
+export const maxDuration = 60;
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);

@@ -1,4 +1,5 @@
 import { Lead } from '../types';
+import { isLikelyMobilePhone } from './phone';
 
 /**
  * Mapeia categorias comuns de busca (PT-BR) para tags do OpenStreetMap.
@@ -219,11 +220,57 @@ async function searchOverpass(
   lon: number,
   tags: { key: string; value: string }[]
 ): Promise<any[]> {
-  const radius = 15000; // 15km
+  const radius = 22000;
 
-  // Gera filtros para todas as tags alternativas
+  // Busca em node (extremamente rápido e leve para não estourar timeout do Overpass)
   const tagFilters = tags.map(t => `node["${t.key}"="${t.value}"]`).join(`;`);
-  const query = `[out:json][timeout:15];(${tagFilters.split(';').map(f => `${f}(around:${radius},${lat},${lon})`).join(';')};);out tags 500;`;
+  const query = `[out:json][timeout:25];(${tagFilters.split(';').map(f => `${f}(around:${radius},${lat},${lon})`).join(';')};);out tags 1000;`;
+  const body = 'data=' + encodeURIComponent(query);
+
+  const servers = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+  ];
+
+  for (const server of servers) {
+    try {
+      console.log(`[LeadEngine] Overpass: ${server}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      const res = await fetch(server, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'LeadMinerApp/2.0 (contact@leadminer.local)'
+        },
+        body,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+      if (!res.ok) { console.error(`[LeadEngine] ${server} -> ${res.status}`); continue; }
+
+      const data = await res.json();
+      const elements = data.elements || [];
+      if (elements.length > 0) return elements;
+    } catch (err: any) {
+      console.error(`[LeadEngine] ${server}: ${err.name === 'AbortError' ? 'Timeout' : err.message}`);
+      continue;
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Etapa 3 (Fallback): Se a categoria exata não retornou nada, busca estabelecimentos
+ * da região e filtra pelo nome contendo a palavra-chave.
+ */
+async function fallbackNameSearch(lat: number, lon: number, keyword: string): Promise<any[]> {
+  const radius = 22000;
+  const query = `[out:json][timeout:25];(node["name"~"${keyword}",i](around:${radius},${lat},${lon}););out tags 800;`;
   const body = 'data=' + encodeURIComponent(query);
 
   const servers = [
@@ -233,61 +280,30 @@ async function searchOverpass(
 
   for (const server of servers) {
     try {
-      console.log(`[LeadEngine] Overpass: ${server}`);
+      console.log(`[LeadEngine] Fallback: buscando por nome contendo "${keyword}" em ${server}...`);
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12000);
+      const timeout = setTimeout(() => controller.abort(), 15000);
 
       const res = await fetch(server, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'LeadMinerApp/2.0 (contact@leadminer.local)'
+        },
         body,
         signal: controller.signal,
       });
 
       clearTimeout(timeout);
-      if (!res.ok) { console.error(`[LeadEngine] ${server} -> ${res.status}`); continue; }
+      if (!res.ok) continue;
 
       const data = await res.json();
       return data.elements || [];
-    } catch (err: any) {
-      console.error(`[LeadEngine] ${server}: ${err.name === 'AbortError' ? 'Timeout' : err.message}`);
+    } catch {
       continue;
     }
   }
-
-  throw new Error('Servidores de mapas indisponíveis. Tente novamente em 30s.');
-}
-
-/**
- * Etapa 3 (Fallback): Se a categoria exata não retornou nada, busca TODOS os negócios
- * da região e filtra pelo nome contendo a palavra-chave.
- */
-async function fallbackNameSearch(lat: number, lon: number, keyword: string): Promise<any[]> {
-  const radius = 15000;
-  // Busca qualquer negócio que tenha um "name" contendo a palavra-chave
-  const query = `[out:json][timeout:15];(node["name"~"${keyword}",i](around:${radius},${lat},${lon}););out tags 500;`;
-  const body = 'data=' + encodeURIComponent(query);
-
-  try {
-    console.log(`[LeadEngine] Fallback: buscando por nome contendo "${keyword}"...`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    return data.elements || [];
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 export async function scrapeLeads(category: string, city: string, country: string): Promise<Lead[]> {
@@ -306,7 +322,7 @@ export async function scrapeLeads(category: string, city: string, country: strin
   console.log(`[LeadEngine] Coordenadas: ${coords.lat}, ${coords.lon}`);
 
   // PASSO 2: Busca por tags do OSM
-  console.log(`[LeadEngine] Buscando ${tags.map(t => `${t.key}=${t.value}`).join(' | ')} em raio de 15km...`);
+  console.log(`[LeadEngine] Buscando ${tags.map(t => `${t.key}=${t.value}`).join(' | ')} em raio de 25km...`);
   let elements = await searchOverpass(coords.lat, coords.lon, tags);
 
   // PASSO 3: Se não achou resultados pela tag, tenta buscar pelo NOME
@@ -323,15 +339,31 @@ export async function scrapeLeads(category: string, city: string, country: strin
   const leads: Lead[] = elements
     .map((el: any) => {
       const t = el.tags || {};
+      // Prioriza tags de contato direto e WhatsApp móvel
+      let phone = t['contact:whatsapp'] || t['whatsapp'] || t['contact:mobile'] || t['mobile'] || t['phone:mobile'] || undefined;
+      if (!phone || !isLikelyMobilePhone(phone)) {
+        const generalPhone = t['contact:phone'] || t.phone || undefined;
+        if (generalPhone && isLikelyMobilePhone(generalPhone)) {
+          phone = generalPhone;
+        }
+      }
+      const website = t['contact:website'] || t.website || t.url || undefined;
+
+      // Resgata WhatsApp direto de links wa.me se presentes no website se ainda sem celular válido
+      if ((!phone || !isLikelyMobilePhone(phone)) && website && /(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i.test(website)) {
+        const match = website.match(/(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i);
+        if (match && match[1]) phone = '+' + match[1];
+      }
+
       return {
         id: String(el.id),
         name: t.name || null,
         category,
         city,
         country,
-        website: t['contact:website'] || t.website || t.url || undefined,
+        website,
         instagram: t['contact:instagram'] || t.instagram || undefined,
-        whatsapp: t['contact:whatsapp'] || t['contact:phone'] || t.phone || undefined,
+        whatsapp: phone,
       };
     })
     .filter((l: Lead) => l.name !== null);

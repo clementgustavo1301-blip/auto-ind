@@ -12,8 +12,8 @@ export function SearchPanel({ onSearch, isLoading }: SearchPanelProps) {
   const [category, setCategory] = useState('');
   const [city, setCity] = useState('');
   const [country, setCountry] = useState('Brasil');
-  const [source, setSource] = useState<'osm' | 'serpapi'>('osm');
-  const [noSite, setNoSite] = useState(true);
+  const [source, setSource] = useState<'osm' | 'serpapi'>('serpapi');
+  const [noSite, setNoSite] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

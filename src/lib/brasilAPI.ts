@@ -22,7 +22,7 @@ export async function fetchCompanyData(cnpj: string): Promise<CompanyData | null
 
     const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleanCnpj}`, { 
       cache: 'no-store',
-      // Um pequeno timeout seria ideal em produção, mas o fetch nativo do Next lida bem
+      signal: AbortSignal.timeout(5000),
     });
 
     if (!res.ok) {

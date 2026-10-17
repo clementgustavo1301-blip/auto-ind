@@ -2,6 +2,7 @@ import { IndustrialLead } from '../types';
 import { calculateIndustryScore, guessSaltDetails } from './industryScoring';
 import { discoverCnpjViaSearch } from './cnpjDiscovery';
 import { fetchCompanyData } from './brasilAPI';
+import { filterLeadsWithWhatsApp, isLikelyMobilePhone } from './phone';
 
 /**
  * Mapeia os segmentos selecionados para queries de busca mais ricas
@@ -15,27 +16,49 @@ function buildQueries(segments: string[], city: string, state: string, country: 
   const baseLocation = `em ${locationParts.join(', ')}`;
   
   if (segments.length === 0 || segments.includes('Todos os segmentos')) {
-    return [`indústrias ${baseLocation}`];
+    return [
+      `indústrias ${baseLocation}`,
+      `fábricas ${baseLocation}`,
+      `empresas industriais ${baseLocation}`,
+      `distribuidoras ${baseLocation}`
+    ];
   }
 
   const queries = new Set<string>();
   
   for (const segment of segments) {
     const s = segment.toLowerCase();
-    queries.add(`"${segment}" ${baseLocation}`); // exato
+    queries.add(`"${segment}" ${baseLocation}`);
+    queries.add(`indústria ${segment} ${baseLocation}`);
+    queries.add(`fábrica de ${segment} ${baseLocation}`);
+    queries.add(`distribuidora ${segment} ${baseLocation}`);
 
     if (s.includes('tratamento de água') || s.includes('saneamento')) {
       queries.add(`estação de tratamento de água ${baseLocation}`);
       queries.add(`tratamento de efluentes ${baseLocation}`);
+      queries.add(`saneamento ${baseLocation}`);
     } else if (s.includes('química') || s.includes('petroquímica')) {
       queries.add(`indústria química ${baseLocation}`);
       queries.add(`produtos químicos industriais ${baseLocation}`);
+      queries.add(`distribuidora de químicos ${baseLocation}`);
     } else if (s.includes('petróleo') || s.includes('perfuração')) {
       queries.add(`óleo e gás ${baseLocation}`);
       queries.add(`serviços de perfuração ${baseLocation}`);
-    } else if (s.includes('alimentícia') || s.includes('frigorífico') || s.includes('carnes')) {
+      queries.add(`petróleo ${baseLocation}`);
+    } else if (s.includes('alimentícia') || s.includes('frigorífico') || s.includes('carnes') || s.includes('alimento')) {
       queries.add(`indústria alimentícia ${baseLocation}`);
       queries.add(`frigorífico ${baseLocation}`);
+      queries.add(`fábrica de alimentos ${baseLocation}`);
+      queries.add(`laticínios ${baseLocation}`);
+    } else if (s.includes('têxtil') || s.includes('confecção')) {
+      queries.add(`indústria têxtil ${baseLocation}`);
+      queries.add(`fábrica de tecidos ${baseLocation}`);
+    } else if (s.includes('cerâmica') || s.includes('vidro')) {
+      queries.add(`indústria cerâmica ${baseLocation}`);
+      queries.add(`olaria ${baseLocation}`);
+    } else if (s.includes('pesca') || s.includes('pescado')) {
+      queries.add(`frigorífico de peixes ${baseLocation}`);
+      queries.add(`beneficiamento de pescado ${baseLocation}`);
     }
   }
 
@@ -62,9 +85,11 @@ export async function scrapeIndustries(
   let renewalDate: string | undefined;
   
   let totalSearches = 0;
+  // Meta bruta aumentada para garantir abundância pós-filtro de WhatsApp
+  const targetRawPlaces = Math.max(quantity * 4, 60);
   
   for (const query of queries) {
-    if (allPlaces.size >= quantity) break; // já pegou o suficiente bruto
+    if (allPlaces.size >= targetRawPlaces) break;
 
     console.log(`[IndustryScraper] Buscando: "${query}"...`);
 
@@ -77,9 +102,9 @@ export async function scrapeIndustries(
 
     let currentUrl = url.toString();
     let pagesFetched = 0;
-    const MAX_PAGES = 3; // Limitar paginação por query para poupar créditos (aumentado para 3 para compensar filtros)
+    const MAX_PAGES = 5; // Aumentado para 5 páginas para maximizar volume de leads
 
-    while (pagesFetched < MAX_PAGES && allPlaces.size < quantity * 1.5) { // pegar um pouco a mais para filtrar
+    while (pagesFetched < MAX_PAGES && allPlaces.size < targetRawPlaces) {
       const res = await fetch(currentUrl);
       if (!res.ok) break;
 
@@ -117,12 +142,29 @@ export async function scrapeIndustries(
 
     const scoring = calculateIndustryScore(name, category, snippet, segments);
     
-    // Ignorar score muito baixo se a quantidade não for um problema,
-    // mas vamos retornar todos e ordenar, depois cortamos pelo quantity.
-    
     // Informações de contato
-    const phone = place.phone || undefined;
+    let phone = place.phone || place.unformatted_phone || undefined;
     const website = place.website || undefined;
+
+    // Se não tem telefone OU o telefone extraído é linha fixa,
+    // resgata ativamente o WhatsApp celular do unformatted_phone, website ou redes
+    if (!phone || !isLikelyMobilePhone(phone)) {
+      if (place.unformatted_phone && isLikelyMobilePhone(place.unformatted_phone)) {
+        phone = place.unformatted_phone;
+      } else if (website && /(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i.test(website)) {
+        const match = website.match(/(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i);
+        if (match && match[1]) phone = '+' + match[1];
+      } else if (place.links) {
+        for (const val of Object.values(place.links)) {
+          const match = String(val).match(/(?:wa\.me|api\.whatsapp\.com\/send\?phone=)(\d+)/i);
+          if (match && match[1]) {
+            phone = '+' + match[1];
+            break;
+          }
+        }
+      }
+    }
+
     let instagram: string | undefined;
     if (place.links) {
       const instaLink = Object.entries(place.links).find(([key]) => key.toLowerCase().includes('instagram'));
@@ -155,8 +197,11 @@ export async function scrapeIndustries(
     });
   }
 
+  // Descarta leads sem WhatsApp ou com telefone fixo
+  const validWhatsAppLeads = await filterLeadsWithWhatsApp(processedLeads);
+
   // Ordenar por maior potencial/score
-  processedLeads.sort((a, b) => b.score - a.score);
+  validWhatsAppLeads.sort((a, b) => b.score - a.score);
 
   // Consulta de créditos do SerpAPI (opcional, só para manter a interface igual)
   try {
@@ -185,14 +230,16 @@ export async function scrapeIndustries(
     console.error('Erro ao pegar conta serpapi', e);
   }
 
-  // Corta a quantidade solicitada (após ordenar por relevância bruta)
-  let finalLeads = processedLeads.slice(0, quantity);
+  // Corta a quantidade solicitada (após filtrar por WhatsApp e ordenar por score)
+  let finalLeads = validWhatsAppLeads.slice(0, quantity);
 
   // ENRIQUECIMENTO B2B VIA BRASIL API (e OSINT de CNPJ)
-  console.log(`[IndustryScraper] Iniciando enriquecimento de ${finalLeads.length} leads...`);
+  // Limita o enriquecimento em lote aos top 10 para preservar cota mensal do SerpAPI
+  const leadsToEnrich = finalLeads.slice(0, 10);
+  const remainingLeads = finalLeads.slice(10);
+  console.log(`[IndustryScraper] Iniciando enriquecimento de ${leadsToEnrich.length} leads prioritários...`);
   
-  // Vamos buscar em paralelo, mas com cuidado para não estourar rate limit. Um Promise.all resolve.
-  finalLeads = await Promise.all(finalLeads.map(async (lead) => {
+  const enrichedTopLeads = await Promise.all(leadsToEnrich.map(async (lead) => {
     try {
       // 1. Achar CNPJ
       const cnpj = await discoverCnpjViaSearch(lead.name, city, state, country);
@@ -209,7 +256,7 @@ export async function scrapeIndustries(
           lead.porteReceita = companyData.descricao_porte;
           lead.capitalSocial = companyData.capital_social;
           
-          // Re-avaliar o score com os dados oficias (CNAE)
+          // Re-avaliar o score com os dados oficiais (CNAE)
           const newScoring = calculateIndustryScore(lead.name, lead.category, '', segments, lead.cnae);
           
           // Se o score melhorou com os dados oficiais da Receita, atualiza.
@@ -226,6 +273,8 @@ export async function scrapeIndustries(
     
     return lead;
   }));
+
+  finalLeads = [...enrichedTopLeads, ...remainingLeads];
   
   // Re-ordenar após enriquecimento
   finalLeads.sort((a, b) => b.score - a.score);
@@ -234,6 +283,6 @@ export async function scrapeIndustries(
     leads: finalLeads, 
     credits, 
     renewalDate,
-    exhausted: processedLeads.length <= quantity
+    exhausted: validWhatsAppLeads.length <= quantity
   };
 }
