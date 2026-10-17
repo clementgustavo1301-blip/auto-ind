@@ -71,9 +71,9 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
   const [leadSearch, setLeadSearch] = useState('');
   const [mobileSection, setMobileSection] = useState<'queue' | 'compose' | 'preview'>('queue');
 
-  // 2. Modelo de Mensagem e Variáveis
+  // 2. Modelo de Mensagem e Variáveis (Gatilho da Curiosidade de Alta Resposta)
   const [messageTemplate, setMessageTemplate] = useState<string>(
-    'Olá, {{nome}}! Tudo bem?\n\nVi que vocês atuam em {{cidade}} com {{categoria}} e temos soluções sob medida para otimizar os processos da {{empresa}}.\n\nPodemos conversar 5 minutinhos?'
+    '{{saudacao}}, {{nome}}! Tudo bem?\n\nEstava dando uma olhada aqui na {{empresa}} em {{cidade}} e reparei em um detalhe bem específico sobre a presença e demanda de vocês em {{categoria}} que me chamou atenção.\n\nÉ você mesmo que cuida dessa parte ou quem seria a melhor pessoa para eu falar?'
   );
 
   const [mediaUrl, setMediaUrl] = useState<string>('');
@@ -1695,6 +1695,58 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
               <span className="text-xs font-mono text-zinc-500 font-bold">
                 ~{estimatedTypingSec}s digitação humana
               </span>
+            </div>
+
+            {/* Modelos Prontos de Alta Conversão */}
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-mono uppercase font-bold text-zinc-600 flex items-center justify-between">
+                <span>Modelos de Alta Resposta:</span>
+                <span className="text-[10px] text-zinc-400 font-normal">Clique para aplicar</span>
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMessageTemplate(
+                    '{{saudacao}}, {{nome}}! Tudo bem?\n\nEstava dando uma olhada aqui na {{empresa}} em {{cidade}} e reparei em um detalhe bem específico sobre a presença e demanda de vocês em {{categoria}} que me chamou atenção.\n\nÉ você mesmo que cuida dessa parte ou quem seria a melhor pessoa para eu falar?'
+                  )}
+                  className="p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 text-left transition-all flex flex-col gap-1 active:translate-y-0.5"
+                >
+                  <span className="text-xs font-black uppercase text-zinc-900 flex items-center gap-1">
+                    🔥 Curiosidade & Detalhe
+                  </span>
+                  <span className="text-[11px] text-zinc-600 line-clamp-2">
+                    "Reparei em um detalhe específico que me chamou atenção..."
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMessageTemplate(
+                    '{{saudacao}}, {{nome}}, tudo bom?\n\nVi a {{empresa}} aqui em {{cidade}} e queria tirar uma dúvida rápida sobre {{categoria}} com você: vocês ainda têm capacidade para novos clientes este mês ou a agenda já está cheia?'
+                  )}
+                  className="p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 text-left transition-all flex flex-col gap-1 active:translate-y-0.5"
+                >
+                  <span className="text-xs font-black uppercase text-zinc-900 flex items-center gap-1">
+                    🎯 Pergunta de Demanda
+                  </span>
+                  <span className="text-[11px] text-zinc-600 line-clamp-2">
+                    "Ainda têm capacidade para novos clientes ou agenda cheia?"
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMessageTemplate(
+                    'Oi, {{nome}}! {{saudacao}}.\n\nEncontrei a {{empresa}} pesquisando referências em {{categoria}} na região de {{cidade}}.\n\nVocê teria 1 minutinho para me tirar uma dúvida rápida sobre como vocês atendem hoje?'
+                  )}
+                  className="p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 text-left transition-all flex flex-col gap-1 active:translate-y-0.5"
+                >
+                  <span className="text-xs font-black uppercase text-zinc-900 flex items-center gap-1">
+                    ⚡ Dúvida Rápida (1 min)
+                  </span>
+                  <span className="text-[11px] text-zinc-600 line-clamp-2">
+                    "Encontrei a empresa... teria 1 min para tirar uma dúvida rápida?"
+                  </span>
+                </button>
+              </div>
             </div>
 
             {/* Tags para Inserção Rápida */}
