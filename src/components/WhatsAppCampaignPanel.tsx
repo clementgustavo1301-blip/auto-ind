@@ -1867,23 +1867,31 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
               <button
                 type="button"
-                onClick={() => setShowConfigPanel(false)}
-                className="min-h-[48px] px-5 py-2.5 bg-zinc-100 hover:bg-zinc-200 border-2 border-zinc-950 font-mono text-xs font-bold uppercase"
+                onClick={() => {
+                  soundEngine.playMechanicalClick('secondary');
+                  setShowConfigPanel(false);
+                }}
+                className="btn-tactile-4 min-h-[48px] px-5 py-2.5 bg-zinc-100 hover:bg-zinc-200 border-2 border-zinc-950 font-mono text-xs font-bold uppercase shadow-[4px_4px_0_0_#18181B]"
               >
                 Fechar
               </button>
-              <button
+              <motion.button
                 type="button"
                 onClick={handleSaveConfig}
                 disabled={isSavingConfig}
-                className="min-h-[48px] px-6 py-2.5 bg-[#E5FF00] hover:bg-white text-zinc-950 border-4 border-zinc-950 font-mono text-xs font-black uppercase shadow-[4px_4px_0_0_#18181B] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all disabled:opacity-50"
+                whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
+                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                className="btn-tactile-4 min-h-[48px] px-6 py-2.5 bg-[#E5FF00] hover:bg-white text-zinc-950 border-4 border-zinc-950 font-mono text-xs font-black uppercase shadow-[4px_4px_0_0_#18181B] disabled:opacity-50 cursor-pointer"
               >
                 {isSavingConfig ? 'Salvando...' : 'Salvar Regras no Microserviço'}
-              </button>
+              </motion.button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ABA DE STORYBOARD MOTION GRAPHICS (VÍDEO PROMOCIONAL DE 30S) */}
+      {activeMainTab === 'studio' && <PromoVideoStudio />}
 
       {/* ABA DE CAMPANHA & DISPARADOR */}
       {activeMainTab === 'campaign' && (
@@ -1892,7 +1900,10 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
           <div className="grid grid-cols-3 lg:hidden bg-zinc-950 p-1.5 border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] gap-1.5">
         <button
           type="button"
-          onClick={() => setMobileSection('queue')}
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setMobileSection('queue');
+          }}
           className={`min-h-[44px] px-2 py-2 font-mono text-[11px] sm:text-xs font-black uppercase transition-all flex items-center justify-center gap-1.5 ${
             mobileSection === 'queue'
               ? 'bg-[#25D366] text-zinc-950 border-2 border-zinc-950'
@@ -1904,7 +1915,10 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         </button>
         <button
           type="button"
-          onClick={() => setMobileSection('compose')}
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setMobileSection('compose');
+          }}
           className={`min-h-[44px] px-2 py-2 font-mono text-[11px] sm:text-xs font-black uppercase transition-all flex items-center justify-center gap-1.5 ${
             mobileSection === 'compose'
               ? 'bg-[#E5FF00] text-zinc-950 border-2 border-zinc-950'
@@ -1916,7 +1930,10 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         </button>
         <button
           type="button"
-          onClick={() => setMobileSection('preview')}
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setMobileSection('preview');
+          }}
           className={`min-h-[44px] px-2 py-2 font-mono text-[11px] sm:text-xs font-black uppercase transition-all flex items-center justify-center gap-1.5 ${
             mobileSection === 'preview'
               ? 'bg-white text-zinc-950 border-2 border-zinc-950'
@@ -1953,8 +1970,11 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                 {serviceStatus.phone && (
                   <button
                     type="button"
-                    onClick={() => setTestPhone(serviceStatus.phone || '')}
-                    className="w-full sm:w-auto min-h-[40px] px-3 py-1.5 bg-zinc-100 hover:bg-[#E5FF00] border-2 border-zinc-950 font-mono text-[11px] font-bold uppercase transition-colors"
+                    onClick={() => {
+                      soundEngine.playMechanicalClick('secondary');
+                      setTestPhone(serviceStatus.phone || '');
+                    }}
+                    className="btn-tactile-4 w-full sm:w-auto min-h-[40px] px-3 py-1.5 bg-zinc-100 hover:bg-[#E5FF00] border-2 border-zinc-950 font-mono text-[11px] font-bold uppercase shadow-[2px_2px_0_0_#18181B]"
                     title="Preenche o campo com o seu próprio WhatsApp conectado"
                   >
                     Usar Meu WhatsApp
@@ -2016,10 +2036,12 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                   )}
                 </span>
 
-                <button
+                <motion.button
                   type="submit"
                   disabled={isSendingTest || !testPhone.trim()}
-                  className="w-full sm:w-auto min-h-[48px] px-6 py-3 bg-[#E5FF00] hover:bg-white text-zinc-950 font-mono text-xs font-black uppercase border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B] hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shrink-0"
+                  whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  className="btn-tactile-4 w-full sm:w-auto min-h-[48px] px-6 py-3 bg-[#E5FF00] hover:bg-white text-zinc-950 font-mono text-xs font-black uppercase border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shrink-0"
                 >
                   {isSendingTest ? (
                     <>
@@ -2030,7 +2052,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                       <Send size={16} strokeWidth={2.5} /> Enviar Mensagem de Teste
                     </>
                   )}
-                </button>
+                </motion.button>
               </div>
             </form>
 
@@ -2064,7 +2086,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
           </div>
 
           {/* Card do Template de Mensagem */}
-          <div className={`bg-white border-4 border-zinc-950 p-4 sm:p-6 md:p-8 shadow-[6px_6px_0_0_#18181B] sm:shadow-[8px_8px_0_0_#18181B] flex-col gap-5 sm:gap-6 ${mobileSection === 'compose' ? 'flex' : 'hidden lg:flex'}`}>
+          <div className={`bg-white border-4 border-zinc-950 p-4 sm:p-6 md:p-8 shadow-[6px_6px_0_0_#18181B] sm:shadow-[8px_8px_0_0_#18181B] flex-col gap-5 sm:gap-6 relative ${mobileSection === 'compose' ? 'flex' : 'hidden lg:flex'}`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b-2 border-zinc-200 pb-4">
               <h3 className="text-lg sm:text-xl font-black uppercase flex items-center gap-2 text-zinc-950">
                 <Sliders size={20} className="shrink-0" /> Mensagem & Variáveis
@@ -2078,117 +2100,121 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
             <div className="flex flex-col gap-2">
               <span className="text-xs font-mono uppercase font-bold text-zinc-600 flex items-center justify-between">
                 <span>Modelos de Alta Resposta:</span>
-                <span className="text-[10px] text-zinc-400 font-normal">Clique para aplicar</span>
+                <span className="text-[10px] text-zinc-400 font-normal">Toque para flash + revelação</span>
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <button
+                <motion.button
                   type="button"
-                  onClick={() => setMessageTemplate(
+                  whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  onClick={() => applyTemplateWithFlash(
                     '{{saudacao}}, {{nome}}! Tudo bem?\n\nEstava dando uma olhada aqui na {{empresa}} em {{cidade}} e reparei em um detalhe bem específico sobre a presença e demanda de vocês em {{categoria}} que me chamou atenção.\n\nÉ você mesmo que cuida dessa parte ou quem seria a melhor pessoa para eu falar?'
                   )}
-                  className="p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 text-left transition-all flex flex-col gap-1 active:translate-y-0.5"
+                  className="btn-tactile-4 p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 shadow-[4px_4px_0_0_#18181B] text-left flex flex-col gap-1 cursor-pointer"
                 >
                   <span className="text-xs font-black uppercase text-zinc-900 flex items-center gap-1">
                     🔥 Curiosidade & Detalhe
                   </span>
                   <span className="text-[11px] text-zinc-600 line-clamp-2">
-                    "Reparei em um detalhe específico que me chamou atenção..."
+                    &ldquo;Reparei em um detalhe específico que me chamou atenção...&rdquo;
                   </span>
-                </button>
-                <button
+                </motion.button>
+                <motion.button
                   type="button"
-                  onClick={() => setMessageTemplate(
+                  whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  onClick={() => applyTemplateWithFlash(
                     '{{saudacao}}, {{nome}}, tudo bom?\n\nVi a {{empresa}} aqui em {{cidade}} e queria tirar uma dúvida rápida sobre {{categoria}} com você: vocês ainda têm capacidade para novos clientes este mês ou a agenda já está cheia?'
                   )}
-                  className="p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 text-left transition-all flex flex-col gap-1 active:translate-y-0.5"
+                  className="btn-tactile-4 p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 shadow-[4px_4px_0_0_#18181B] text-left flex flex-col gap-1 cursor-pointer"
                 >
                   <span className="text-xs font-black uppercase text-zinc-900 flex items-center gap-1">
                     🎯 Pergunta de Demanda
                   </span>
                   <span className="text-[11px] text-zinc-600 line-clamp-2">
-                    "Ainda têm capacidade para novos clientes ou agenda cheia?"
+                    &ldquo;Ainda têm capacidade para novos clientes ou agenda cheia?&rdquo;
                   </span>
-                </button>
-                <button
+                </motion.button>
+                <motion.button
                   type="button"
-                  onClick={() => setMessageTemplate(
+                  whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  onClick={() => applyTemplateWithFlash(
                     'Oi, {{nome}}! {{saudacao}}.\n\nEncontrei a {{empresa}} pesquisando referências em {{categoria}} na região de {{cidade}}.\n\nVocê teria 1 minutinho para me tirar uma dúvida rápida sobre como vocês atendem hoje?'
                   )}
-                  className="p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 text-left transition-all flex flex-col gap-1 active:translate-y-0.5"
+                  className="btn-tactile-4 p-2.5 bg-zinc-50 hover:bg-[#E5FF00] border-2 border-zinc-950 shadow-[4px_4px_0_0_#18181B] text-left flex flex-col gap-1 cursor-pointer"
                 >
                   <span className="text-xs font-black uppercase text-zinc-900 flex items-center gap-1">
                     ⚡ Dúvida Rápida (1 min)
                   </span>
                   <span className="text-[11px] text-zinc-600 line-clamp-2">
-                    "Encontrei a empresa... teria 1 min para tirar uma dúvida rápida?"
+                    &ldquo;Encontrei a empresa... teria 1 min para tirar uma dúvida rápida?&rdquo;
                   </span>
-                </button>
+                </motion.button>
               </div>
             </div>
 
-            {/* Tags para Inserção Rápida */}
-            <div className="flex flex-col gap-2">
+            {/* Tags para Inserção Rápida com Salto Visual */}
+            <div className="flex flex-col gap-2 relative">
               <span className="text-xs font-mono uppercase font-bold text-zinc-600">
                 Inserir Tags Dinâmicas:
               </span>
               <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => insertTag('nome')}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-[#E5FF00] transition-colors"
-                >
-                  + {'{{nome}}'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertTag('empresa')}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-[#E5FF00] transition-colors"
-                >
-                  + {'{{empresa}}'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertTag('cidade')}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-[#E5FF00] transition-colors"
-                >
-                  + {'{{cidade}}'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertTag('categoria')}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-[#E5FF00] transition-colors"
-                >
-                  + {'{{categoria}}'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertTag('saudacao')}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-[#E5FF00] transition-colors"
-                  title="Insere 'Bom dia', 'Boa tarde' ou 'Boa noite' automaticamente"
-                >
-                  + {'{{saudacao}}'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => insertTag('telefone')}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-[#E5FF00] transition-colors"
-                >
-                  + {'{{telefone}}'}
-                </button>
+                {(['nome', 'empresa', 'cidade', 'categoria', 'saudacao', 'telefone'] as const).map(tagKey => (
+                  <motion.button
+                    key={tagKey}
+                    type="button"
+                    whileTap={{ scale: 0.92, y: -3 }}
+                    transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
+                    onClick={() => insertTag(tagKey)}
+                    className="btn-tactile-4 min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-[#E5FF00] shadow-[2px_2px_0_0_#18181B] cursor-pointer"
+                  >
+                    + {`{{${tagKey}}}`}
+                  </motion.button>
+                ))}
               </div>
+
+              {/* Etiqueta que salta visualmente do botão para dentro da caixa de texto */}
+              <AnimatePresence>
+                {jumpingTag && (
+                  <motion.div
+                    key={jumpingTag.id}
+                    initial={{ y: -8, x: 20, scale: 1.15, opacity: 1 }}
+                    animate={{ y: 52, x: 40, scale: 0.85, opacity: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                    className="pointer-events-none absolute left-4 top-8 z-30 px-2.5 py-1 bg-[#E5FF00] text-zinc-950 border-2 border-zinc-950 font-mono text-xs font-black shadow-[4px_4px_0_0_#18181B]"
+                  >
+                    + {jumpingTag.tag}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
-            {/* Textarea */}
+            {/* Textarea com Flash Amarelo-Claro e Revelação Rápida */}
             <div className="flex flex-col gap-1.5">
-              <textarea
-                rows={6}
-                value={messageTemplate}
-                onChange={(e) => setMessageTemplate(e.target.value)}
-                placeholder="Escreva a mensagem aqui utilizando as tags dinâmicas..."
-                className="w-full p-3.5 sm:p-4 border-4 border-zinc-950 font-mono text-xs sm:text-sm leading-relaxed text-zinc-900 focus:outline-none focus:ring-4 focus:ring-[#E5FF00] bg-zinc-50"
-              />
+              <motion.div
+                key={templateFlashKey}
+                initial={templateFlashKey > 0 ? { backgroundColor: '#fef08a', scale: 0.992 } : false}
+                animate={{ backgroundColor: '#fafafa', scale: 1 }}
+                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                className="w-full border-4 border-zinc-950 overflow-hidden"
+              >
+                <textarea
+                  rows={6}
+                  value={messageTemplate}
+                  onChange={(e) => setMessageTemplate(e.target.value)}
+                  placeholder="Escreva a mensagem aqui utilizando as tags dinâmicas..."
+                  className={`w-full p-3.5 sm:p-4 font-mono text-xs sm:text-sm leading-relaxed text-zinc-900 focus:outline-none focus:ring-4 focus:ring-[#E5FF00] bg-transparent block ${
+                    templateFlashKey > 0 ? 'animate-template-flash' : ''
+                  }`}
+                />
+              </motion.div>
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 text-[11px] sm:text-xs font-mono text-zinc-500 pt-1">
-                <span>{messageTemplate.length} caracteres</span>
+                <span className="flex items-center gap-1.5">
+                  <OdometerCounter value={messageTemplate.length} />
+                  <span>caracteres</span>
+                </span>
                 <span>Intervalo: {antiBanConfig.min_delay_sec}s a {antiBanConfig.max_delay_sec}s entre envios</span>
               </div>
             </div>
@@ -2211,7 +2237,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
             </div>
           </div>
 
-          {/* Lista de Leads Selecionados */}
+          {/* Lista de Leads Selecionados (FILA) */}
           <div className={`bg-white border-4 border-zinc-950 p-4 sm:p-6 md:p-8 shadow-[6px_6px_0_0_#18181B] sm:shadow-[8px_8px_0_0_#18181B] flex-col gap-5 sm:gap-6 ${mobileSection === 'queue' ? 'flex' : 'hidden lg:flex'}`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 border-b-2 border-zinc-200 pb-4">
               <div>
@@ -2223,19 +2249,27 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                 </span>
               </div>
 
-              {/* Botões de Seleção e Busca */}
-              <div className="grid grid-cols-2 sm:flex items-center gap-2">
+              {/* Botões de Seleção, Simulação de Estados e Busca */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSimulateQueueFlow}
+                  className="btn-tactile-4 min-h-[40px] px-3 py-1.5 bg-[#E5FF00] hover:bg-yellow-300 border-2 border-zinc-950 text-xs font-mono font-black uppercase shadow-[2px_2px_0_0_#18181B] flex items-center gap-1 cursor-pointer"
+                  title="Simular transição EM ESPERA -> DIGITANDO... -> ENVIADO"
+                >
+                  <Zap size={13} strokeWidth={2.75} /> Simular Fila
+                </button>
                 <button
                   type="button"
                   onClick={() => handleToggleSelectAll(true)}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-zinc-200"
+                  className="btn-tactile-4 min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-zinc-200 shadow-[2px_2px_0_0_#18181B]"
                 >
                   Marcar Todos
                 </button>
                 <button
                   type="button"
                   onClick={() => handleToggleSelectAll(false)}
-                  className="min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-zinc-200"
+                  className="btn-tactile-4 min-h-[40px] px-3 py-1.5 bg-zinc-100 border-2 border-zinc-950 text-xs font-mono font-bold hover:bg-zinc-200 shadow-[2px_2px_0_0_#18181B]"
                 >
                   Desmarcar
                 </button>
@@ -2262,32 +2296,63 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                     <div className="flex flex-col items-center gap-3">
                       <Phone size={32} className="text-zinc-400" />
                       <p>Nenhum lead com WhatsApp encontrado na pesquisa atual.</p>
-                      {onBackToSearch && (
+                      <div className="flex flex-wrap items-center justify-center gap-2">
                         <button
                           type="button"
-                          onClick={onBackToSearch}
-                          className="min-h-[44px] px-4 py-2 bg-zinc-950 text-[#E5FF00] font-black uppercase text-xs border-2 border-zinc-950"
+                          onClick={handleSimulateQueueFlow}
+                          className="btn-tactile-4 min-h-[44px] px-4 py-2 bg-[#25D366] text-zinc-950 font-black uppercase text-xs border-2 border-zinc-950 shadow-[4px_4px_0_0_#18181B]"
                         >
-                          Voltar para Pesquisa
+                          ⚡ Carregar Leads Demo (Chapecó) & Simular Fila
                         </button>
-                      )}
+                        {onBackToSearch && (
+                          <button
+                            type="button"
+                            onClick={onBackToSearch}
+                            className="btn-tactile-4 min-h-[44px] px-4 py-2 bg-zinc-950 text-[#E5FF00] font-black uppercase text-xs border-2 border-zinc-950 shadow-[4px_4px_0_0_#18181B]"
+                          >
+                            Voltar para Pesquisa
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     'Nenhum lead corresponde ao filtro de busca.'
                   )}
                 </div>
               ) : (
-                filteredLeadItems.map((item) => {
+                filteredLeadItems.map((item, idx) => {
                   const isCurrentActive = item.id === selectedLeadId;
+                  const isGreenState = item.status === 'typing' || item.status === 'sent';
                   const l = item.lead;
                   return (
-                    <div
+                    <motion.div
                       key={item.id}
-                      onClick={() => setSelectedLeadId(item.id)}
-                      className={`p-3 border-2 transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 ${
-                        isCurrentActive
-                          ? 'border-zinc-950 bg-[#E5FF00]/20 shadow-[2px_2px_0_0_#18181B]'
-                          : 'border-zinc-300 bg-white hover:border-zinc-950'
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{
+                        opacity: 1,
+                        y: 0,
+                        backgroundColor:
+                          item.status === 'sent'
+                            ? '#dcfce7'
+                            : item.status === 'typing'
+                            ? '#ecfdf5'
+                            : isCurrentActive
+                            ? '#fef9c3'
+                            : '#ffffff',
+                      }}
+                      transition={{
+                        delay: Math.min(idx * 0.05, 0.4),
+                        duration: 0.22,
+                        ease: [0.22, 1, 0.36, 1],
+                      }}
+                      onClick={() => {
+                        soundEngine.playMechanicalClick('secondary');
+                        setSelectedLeadId(item.id);
+                      }}
+                      className={`p-3 border-2 transition-all duration-200 cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 ${
+                        isCurrentActive || isGreenState
+                          ? 'border-zinc-950 shadow-[3px_3px_0_0_#18181B]'
+                          : 'border-zinc-300 hover:border-zinc-950'
                       }`}
                     >
                       <div className="flex items-start sm:items-center gap-3 min-w-0">
@@ -2315,9 +2380,15 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                       {/* Status Badge + Botão Mobile Preview */}
                       <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pl-8 sm:pl-0 border-t sm:border-t-0 border-zinc-100 pt-2 sm:pt-0">
                         {item.status === 'sent' && (
-                          <span className="px-2.5 py-1 bg-green-100 text-green-900 text-[10px] font-mono font-black uppercase border border-green-600 flex items-center gap-1 shadow-sm">
-                            <CheckCheck size={14} className="text-emerald-700" strokeWidth={2.5} /> Enviado
-                          </span>
+                          <motion.span
+                            key="badge-sent"
+                            initial={{ scale: 1 }}
+                            animate={{ scale: [1, 1.08, 1] }}
+                            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                            className="animate-sent-bounce px-2.5 py-1 bg-[#25D366] text-zinc-950 text-[10px] font-mono font-black uppercase border-2 border-zinc-950 flex items-center gap-1 shadow-[2px_2px_0_0_#18181B]"
+                          >
+                            <CheckCheck size={14} className="text-zinc-950" strokeWidth={3} /> ✅ Enviado
+                          </motion.span>
                         )}
                         {item.status === 'queued' && (
                           <span className="px-2.5 py-1 bg-amber-100 text-amber-900 text-[10px] font-mono font-black uppercase border border-amber-600 flex items-center gap-1 shadow-sm">
@@ -2325,7 +2396,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                           </span>
                         )}
                         {item.status === 'typing' && (
-                          <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 text-[10px] font-mono font-black uppercase border-2 border-emerald-600 flex items-center gap-1.5 animate-pulse shadow-sm">
+                          <span className="animate-typing-border-pulse px-2.5 py-1 bg-emerald-100 text-emerald-950 text-[10px] font-mono font-black uppercase border-2 border-emerald-600 flex items-center gap-1.5 shadow-sm">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping inline-block" />
                             ✍️ Digitando...
                           </span>
@@ -2379,19 +2450,21 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                         </button>
                         <ChevronRight size={16} className={`hidden sm:block ${isCurrentActive ? 'text-zinc-950' : 'text-zinc-300'}`} />
                       </div>
-                    </div>
+                    </motion.div>
                   );
                 })
               )}
             </div>
 
-            {/* Ação de Disparo em Massa */}
+            {/* Ação de Disparo em Massa com Efeito de Clique Tátil (translate(4px, 4px) + sombra zero) */}
             <div className="pt-4 border-t-2 border-zinc-200 flex flex-col gap-3">
-              <button
+              <motion.button
                 type="button"
                 onClick={handleStartBatchDispatch}
                 disabled={isSending || selectedCount === 0 || serviceStatus.limit_reached}
-                className="w-full min-h-[54px] py-3.5 sm:py-4 px-4 sm:px-6 bg-[#25D366] text-zinc-950 font-black uppercase tracking-wider text-sm sm:text-lg border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] hover:shadow-none hover:translate-x-1 hover:translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 sm:gap-3 text-center"
+                whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
+                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                className="btn-tactile-6 w-full min-h-[54px] py-3.5 sm:py-4 px-4 sm:px-6 bg-[#25D366] text-zinc-950 font-black uppercase tracking-wider text-sm sm:text-lg border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 sm:gap-3 text-center cursor-pointer"
               >
                 {isSending ? (
                   <>
@@ -2402,7 +2475,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                     <Send size={22} strokeWidth={3} className="shrink-0" /> Disparar para {selectedCount} Leads Selecionados
                   </>
                 )}
-              </button>
+              </motion.button>
 
               {isSending && (
                 <div className="w-full bg-zinc-200 h-2 border border-zinc-950 overflow-hidden">
@@ -2428,7 +2501,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
               <button
                 type="button"
                 onClick={runLiveTypingSimulation}
-                className={`min-h-[36px] text-[11px] font-mono font-bold px-2.5 py-1 border-2 border-zinc-950 transition-colors ${
+                className={`btn-tactile-4 min-h-[36px] text-[11px] font-mono font-bold px-2.5 py-1 border-2 border-zinc-950 shadow-[2px_2px_0_0_#18181B] transition-colors cursor-pointer ${
                   showSimulatedTyping ? 'bg-[#25D366] text-zinc-950 animate-pulse' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
                 }`}
               >
@@ -2544,8 +2617,14 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                     HOJE
                   </div>
 
-                  {/* Balão de Mensagem de Envio */}
-                  <div className={`self-end max-w-[85%] ${activeLead?.status === 'failed' ? 'bg-[#3b2326] border-red-800' : 'bg-[#005c4b] border-[#025143]'} text-[#e9edef] rounded-lg rounded-tr-none p-3 shadow-md relative border animate-in fade-in slide-in-from-bottom-2 duration-300`}>
+                  {/* Balão de Mensagem de Envio com Assentamento Vertical ao Concluir */}
+                  <motion.div
+                    key={justFinishedTyping || activeLead?.status === 'sent' ? 'settled' : 'active'}
+                    initial={justFinishedTyping || activeLead?.status === 'sent' ? { y: -6, scale: 0.985 } : false}
+                    animate={{ y: 0, scale: 1 }}
+                    transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    className={`self-end max-w-[85%] ${activeLead?.status === 'failed' ? 'bg-[#3b2326] border-red-800' : 'bg-[#005c4b] border-[#025143]'} text-[#e9edef] rounded-lg rounded-tr-none p-3 shadow-md relative border`}
+                  >
                     
                     {/* Preview de Mídia se houver */}
                     {mediaUrl && (
@@ -2557,19 +2636,19 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                       </div>
                     )}
 
-                    {/* Texto com quebras de linha preservadas */}
+                    {/* Texto com quebras de linha preservadas + Cursor Verde em Bloco a 500ms */}
                     <div className="text-xs leading-relaxed whitespace-pre-wrap font-sans break-words select-text">
                       {(activeLead?.status === 'typing' || showSimulatedTyping) ? (
                         <>
                           <span>{displayedTypingText}</span>
-                          <span className="inline-block w-1.5 h-3.5 bg-[#25D366] ml-0.5 animate-pulse align-middle" />
+                          <span className="inline-block w-2 h-3.5 bg-[#25D366] ml-0.5 align-middle animate-cursor-500" />
                         </>
                       ) : (
                         interpolatedMessage
                       )}
                     </div>
 
-                    {/* Timestamp e Tiques / Status */}
+                    {/* Timestamp e Duplo Visto Verde ao concluir */}
                     <div className="flex items-center justify-end gap-1.5 mt-1 text-[9px] text-[#8696a0]">
                       <span>14:32</span>
                       {activeLead?.status === 'queued' ? (
@@ -2597,19 +2676,26 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                           <span>Não entregue (Ver Motivo)</span>
                         </button>
                       ) : (
-                        <CheckCheck size={14} className="text-[#53bdeb]" />
+                        <motion.span
+                          initial={{ scale: 0.6, opacity: 0 }}
+                          animate={{ scale: [1, 1.18, 1], opacity: 1 }}
+                          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                          className="inline-flex items-center gap-0.5 text-[#25D366] font-mono font-bold"
+                        >
+                          <CheckCheck size={15} className="text-[#25D366]" strokeWidth={2.75} />
+                        </motion.span>
                       )}
                     </div>
-                  </div>
+                  </motion.div>
 
-                  {/* Balão Animado de Digitação quando ativo */}
+                  {/* Indicador «Digitando •••» com Onda Sinusoidal Contínua (desfasamento de 150ms) */}
                   {(showSimulatedTyping || activeLead?.status === 'typing') && (
-                    <div className="self-start bg-[#202c33] text-[#8696a0] rounded-lg rounded-tl-none px-3 py-2 text-xs flex items-center gap-1.5 shadow-sm border border-[#2a3942] animate-pulse">
-                      <span>Digitando {simulatedCountdown !== null ? `(${simulatedCountdown}s restantes)` : ''}</span>
-                      <span className="flex gap-0.5">
-                        <span className="w-1 h-1 bg-[#00a884] rounded-full animate-bounce" />
-                        <span className="w-1 h-1 bg-[#00a884] rounded-full animate-bounce [animation-delay:0.2s]" />
-                        <span className="w-1 h-1 bg-[#00a884] rounded-full animate-bounce [animation-delay:0.4s]" />
+                    <div className="self-start bg-[#202c33] text-[#8696a0] rounded-lg rounded-tl-none px-3 py-2 text-xs flex items-center gap-2 shadow-sm border border-[#2a3942]">
+                      <span>Digitando {simulatedCountdown !== null ? `(${simulatedCountdown}s)` : ''}</span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-[#00a884] rounded-full animate-sine-dot-1" />
+                        <span className="w-1.5 h-1.5 bg-[#00a884] rounded-full animate-sine-dot-2" />
+                        <span className="w-1.5 h-1.5 bg-[#00a884] rounded-full animate-sine-dot-3" />
                       </span>
                     </div>
                   )}
@@ -2648,7 +2734,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
               </div>
             </div>
 
-            {/* Info Box abaixo do simulador */}
+            {/* Info Box abaixo do simulador com transição «✍️ Digitando no WhatsApp...» -> «✓ Enviado» */}
             <div className="mt-4 p-3 bg-zinc-100 border-2 border-zinc-950 text-zinc-800 text-xs font-mono flex flex-col gap-2 shadow-[4px_4px_0_0_#18181B]">
               <div className="flex items-center justify-between gap-2">
                 <span>Lead Selecionado:</span>
@@ -2659,22 +2745,24 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
               <div className="flex items-center justify-between pt-1 border-t border-zinc-300">
                 <span>Status do Envio:</span>
                 <div>
-                  {activeLead?.status === 'sent' && (
-                    <span className="font-black text-green-700 flex items-center gap-1">
-                      <CheckCheck size={14} /> Enviado
-                    </span>
-                  )}
-                  {activeLead?.status === 'queued' && (
-                    <span className="font-black text-amber-700 flex items-center gap-1">
-                      <Clock size={12} className="animate-spin" /> Em Espera na Fila
-                    </span>
-                  )}
-                  {activeLead?.status === 'typing' && (
+                  {(activeLead?.status === 'typing' || showSimulatedTyping) ? (
                     <span className="font-black text-emerald-700 flex items-center gap-1 animate-pulse">
                       ✍️ Digitando no WhatsApp...
                     </span>
-                  )}
-                  {activeLead?.status === 'failed' && (
+                  ) : (activeLead?.status === 'sent' || justFinishedTyping) ? (
+                    <motion.span
+                      initial={{ scale: 0.9, y: 3 }}
+                      animate={{ scale: [1, 1.08, 1], y: 0 }}
+                      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                      className="font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 border border-emerald-700 flex items-center gap-1"
+                    >
+                      <CheckCheck size={14} className="text-[#25D366]" strokeWidth={3} /> ✓ Enviado
+                    </motion.span>
+                  ) : activeLead?.status === 'queued' ? (
+                    <span className="font-black text-amber-700 flex items-center gap-1">
+                      <Clock size={12} className="animate-spin" /> Em Espera na Fila
+                    </span>
+                  ) : activeLead?.status === 'failed' ? (
                     <button
                       type="button"
                       onClick={() => {
@@ -2687,8 +2775,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                     >
                       <AlertCircle size={12} /> Falha (Ver Motivo)
                     </button>
-                  )}
-                  {activeLead?.status === 'idle' && (
+                  ) : (
                     <span className="text-zinc-500 font-bold">Aguardando Disparo</span>
                   )}
                 </div>

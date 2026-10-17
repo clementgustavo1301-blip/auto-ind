@@ -1,6 +1,7 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { SearchPanel } from '@/components/SearchPanel';
 import { SearchPanelIndustries, IndustrySearchParams } from '@/components/SearchPanelIndustries';
 import { LeadCard } from '@/components/LeadCard';
@@ -8,8 +9,10 @@ import { IndustrialLeadCard } from '@/components/IndustrialLeadCard';
 import { ExportPDF } from '@/components/ExportPDF';
 import { ExportIndustrialPDF } from '@/components/ExportIndustrialPDF';
 import { Lead, IndustrialLead } from '@/types';
-import { AlertTriangle, Layers, Coins, Building2, Globe, MessageSquare, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, Layers, Coins, Building2, Globe, MessageSquare, CheckCircle2, LogOut } from 'lucide-react';
 import { WhatsAppCampaignPanel } from '@/components/WhatsAppCampaignPanel';
+import { supabase } from '@/lib/supabase';
+import { getOperatorSession, signOutOperator } from '@/lib/auth';
 
 type SearchRequest = {
   category: string;
@@ -48,6 +51,9 @@ function getIndustrySearchKey(params: IndustrySearchParams) {
 }
 
 export default function Home() {
+  const router = useRouter();
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [operatorEmail, setOperatorEmail] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'local' | 'industries' | 'whatsapp'>('local');
   
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -69,6 +75,45 @@ export default function Home() {
   const [renewalDate, setRenewalDate] = useState<string | null>(null);
   const [hasExhaustedResults, setHasExhaustedResults] = useState(false);
   const seenLeadIds = useRef(new Map<string, Set<string>>());
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function verifySession() {
+      const session = await getOperatorSession();
+      if (!mounted) return;
+
+      if (!session) {
+        router.replace('/login');
+        return;
+      }
+
+      setOperatorEmail(session.user.email || 'OPERADOR');
+      setIsCheckingAuth(false);
+    }
+
+    verifySession();
+
+    const authListener = supabase?.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      if (!session) {
+        router.replace('/login');
+      } else {
+        setOperatorEmail(session.user.email || 'OPERADOR');
+        setIsCheckingAuth(false);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      authListener?.data.subscription.unsubscribe();
+    };
+  }, [router]);
+
+  const handleLogout = async () => {
+    await signOutOperator();
+    router.replace('/login');
+  };
 
   const handleSearch = async (params: SearchRequest) => {
     setIsLoading(true);
@@ -184,6 +229,21 @@ export default function Home() {
   };
 
 
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-white text-zinc-950 font-sans flex flex-col justify-between">
+        <div className="h-3 md:h-4 w-full bg-zinc-950" />
+        <main className="max-w-xl mx-auto px-4 py-16 flex flex-col items-center justify-center gap-4 text-center">
+          <div className="w-10 h-10 bg-[#E5FF00] border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B] animate-spin" />
+          <p className="font-mono text-xs sm:text-sm font-black uppercase tracking-widest text-zinc-950 bg-zinc-100 px-3 py-1.5 border-2 border-zinc-950">
+            VERIFICANDO SESSÃO CRIPTOGRÁFICA // LEADCORE
+          </p>
+        </main>
+        <div className="h-3 md:h-4 w-full bg-zinc-950" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-white text-zinc-950 font-sans selection:bg-[#E5FF00] selection:text-black overflow-x-hidden">
       {/* Pura brutalidade: linha grossa no topo */}
@@ -192,23 +252,39 @@ export default function Home() {
       <main className="max-w-7xl mx-auto px-3.5 sm:px-6 md:px-12 pt-5 pb-28 md:py-20 flex flex-col gap-7 sm:gap-10 md:gap-16">
         {/* Header - Brutalist Typographic (Adaptado para Mobile) */}
         <header className="flex flex-col gap-3 sm:gap-5 md:gap-8 max-w-4xl">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2.5">
               <div className="w-3.5 h-3.5 md:w-4 md:h-4 bg-[#E5FF00] border-2 border-zinc-950 shrink-0" />
               <span className="font-mono text-[11px] sm:text-xs md:text-sm uppercase tracking-widest font-bold text-zinc-600 truncate">
                 System // Lead Generation Core
               </span>
             </div>
-            {leadsWithWhatsApp.length > 0 && activeTab !== 'whatsapp' && (
+            <div className="flex items-center gap-2">
+              {leadsWithWhatsApp.length > 0 && activeTab !== 'whatsapp' && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('whatsapp')}
+                  className="md:hidden bg-[#25D366] text-zinc-950 border-2 border-zinc-950 px-2.5 py-1 font-mono font-black text-[10px] uppercase flex items-center gap-1 shadow-[2px_2px_0_0_#18181B] shrink-0"
+                >
+                  <MessageSquare size={12} strokeWidth={3} />
+                  {leadsWithWhatsApp.length} WPP
+                </button>
+              )}
+              {operatorEmail && (
+                <span className="hidden sm:inline-block font-mono text-[11px] font-bold uppercase bg-zinc-100 border-2 border-zinc-950 px-2.5 py-1 text-zinc-800 truncate max-w-[220px]">
+                  {operatorEmail}
+                </span>
+              )}
               <button
                 type="button"
-                onClick={() => setActiveTab('whatsapp')}
-                className="md:hidden bg-[#25D366] text-zinc-950 border-2 border-zinc-950 px-2.5 py-1 font-mono font-black text-[10px] uppercase flex items-center gap-1 shadow-[2px_2px_0_0_#18181B] shrink-0"
+                onClick={handleLogout}
+                title="Encerrar sessão"
+                className="btn-tactile-4 bg-white hover:bg-[#E5FF00] text-zinc-950 border-2 border-zinc-950 px-2.5 sm:px-3 py-1 font-mono font-black text-[10px] sm:text-xs uppercase flex items-center gap-1.5 shadow-[2px_2px_0_0_#18181B] cursor-pointer shrink-0"
               >
-                <MessageSquare size={12} strokeWidth={3} />
-                {leadsWithWhatsApp.length} WPP
+                <LogOut size={13} strokeWidth={2.75} />
+                <span>Sair</span>
               </button>
-            )}
+            </div>
           </div>
           <h1 className="text-4xl sm:text-6xl md:text-8xl font-black uppercase tracking-tighter leading-[0.92] text-zinc-950">
             Encontre<br/>
@@ -333,7 +409,7 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => setActiveTab('whatsapp')}
-                        className="w-full sm:w-auto min-h-[48px] flex items-center justify-center gap-2 bg-[#25D366] text-zinc-950 font-black uppercase py-3 px-5 text-xs sm:text-sm border-3 md:border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B] active:translate-y-0.5 transition-all"
+                        className="btn-tactile-4 w-full sm:w-auto min-h-[48px] flex items-center justify-center gap-2 bg-[#25D366] text-zinc-950 font-black uppercase py-3 px-5 text-xs sm:text-sm border-3 md:border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B] transition-all cursor-pointer"
                       >
                         <MessageSquare size={18} strokeWidth={3} />
                         Disparar WhatsApp ({leadsWithWhatsApp.length})
@@ -367,7 +443,7 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => setActiveTab('whatsapp')}
-                        className="w-full sm:w-auto min-h-[48px] flex items-center justify-center gap-2 bg-[#25D366] text-zinc-950 font-black uppercase py-3 px-5 text-xs sm:text-sm border-3 md:border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B] active:translate-y-0.5 transition-all"
+                        className="btn-tactile-4 w-full sm:w-auto min-h-[48px] flex items-center justify-center gap-2 bg-[#25D366] text-zinc-950 font-black uppercase py-3 px-5 text-xs sm:text-sm border-3 md:border-4 border-zinc-950 shadow-[4px_4px_0_0_#18181B] transition-all cursor-pointer"
                       >
                         <MessageSquare size={18} strokeWidth={3} />
                         Disparar WhatsApp ({leadsWithWhatsApp.length})
