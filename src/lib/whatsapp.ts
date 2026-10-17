@@ -3,7 +3,16 @@
  * Gerencia envio sequencial, verificação de fila e status de conexão.
  */
 
-const WHATSAPP_SERVICE_URL = process.env.WHATSAPP_SERVICE_URL || 'http://localhost:5001';
+let customServiceUrl: string | null = null;
+
+export function setServiceUrl(url: string) {
+  customServiceUrl = url.trim().replace(/\/+$/, '');
+}
+
+export function getServiceUrl(): string {
+  if (customServiceUrl) return customServiceUrl;
+  return (process.env.WHATSAPP_SERVICE_URL || 'http://localhost:5001').trim().replace(/\/+$/, '');
+}
 
 export interface WhatsAppSendOptions {
   phone: string;
@@ -61,7 +70,7 @@ export async function sendWhatsAppMessage(
   params: WhatsAppSendOptions
 ): Promise<WhatsAppSendResponse> {
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/send`, {
+    const res = await fetch(`${getServiceUrl()}/api/send`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -107,7 +116,7 @@ export async function sendWhatsAppMessage(
  */
 export async function getWhatsAppStatus(): Promise<WhatsAppStatusResponse | null> {
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/status`, {
+    const res = await fetch(`${getServiceUrl()}/api/status`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
@@ -125,7 +134,7 @@ export async function getWhatsAppStatus(): Promise<WhatsAppStatusResponse | null
  */
 export async function getWhatsAppQueue(): Promise<WhatsAppQueueItem[]> {
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/queue`, {
+    const res = await fetch(`${getServiceUrl()}/api/queue`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
@@ -145,7 +154,7 @@ export async function getWhatsAppQueue(): Promise<WhatsAppQueueItem[]> {
  */
 export async function getWhatsAppConfig(): Promise<WhatsAppAntiBanConfig | null> {
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/config`, {
+    const res = await fetch(`${getServiceUrl()}/api/config`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
@@ -165,7 +174,7 @@ export async function updateWhatsAppConfig(
   newConfig: Partial<WhatsAppAntiBanConfig>
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/config`, {
+    const res = await fetch(`${getServiceUrl()}/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newConfig),
@@ -195,7 +204,7 @@ export interface WhatsAppQRResponse {
  */
 export async function getWhatsAppQR(): Promise<WhatsAppQRResponse | null> {
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/qr?format=json`, {
+    const res = await fetch(`${getServiceUrl()}/api/qr?format=json`, {
       cache: 'no-store',
       headers: { 'Accept': 'application/json' },
       signal: AbortSignal.timeout(5000),
@@ -214,7 +223,7 @@ export async function getWhatsAppQR(): Promise<WhatsAppQRResponse | null> {
  */
 export async function disconnectWhatsApp(): Promise<boolean> {
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/disconnect`, {
+    const res = await fetch(`${getServiceUrl()}/api/disconnect`, {
       method: 'POST',
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
@@ -240,7 +249,7 @@ export async function checkWhatsAppNumbers(
 ): Promise<Record<string, boolean> | null> {
   if (!phones || phones.length === 0) return {};
   try {
-    const res = await fetch(`${WHATSAPP_SERVICE_URL}/api/check`, {
+    const res = await fetch(`${getServiceUrl()}/api/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phones }),

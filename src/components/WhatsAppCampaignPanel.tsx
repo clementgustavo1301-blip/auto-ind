@@ -384,6 +384,45 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
   const [isLoadingQR, setIsLoadingQR] = useState<boolean>(false);
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
   const [qrError, setQrError] = useState<string | null>(null);
+  const [inputEndpointUrl, setInputEndpointUrl] = useState<string>('');
+  const [isUpdatingEndpoint, setIsUpdatingEndpoint] = useState<boolean>(false);
+  const [endpointFeedback, setEndpointFeedback] = useState<string>('');
+
+  useEffect(() => {
+    fetch('/api/whatsapp/endpoint')
+      .then(res => res.json())
+      .then(d => { if (d.url) setInputEndpointUrl(d.url); })
+      .catch(() => {});
+  }, []);
+
+  const handleSaveEndpoint = async (customUrl?: string) => {
+    const urlToSave = (customUrl || inputEndpointUrl).trim();
+    if (!urlToSave) return;
+    try {
+      setIsUpdatingEndpoint(true);
+      setEndpointFeedback('Testando e conectando...');
+      const res = await fetch('/api/whatsapp/endpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlToSave }),
+      });
+      const data = await res.json();
+      if (res.ok && data.reachable) {
+        setEndpointFeedback('✅ Conectado com sucesso ao microserviço!');
+        setQrError(null);
+        await fetchStatus();
+        await fetchQR();
+      } else if (res.ok) {
+        setEndpointFeedback('⚠️ URL salva, mas o microserviço não respondeu ainda.');
+      } else {
+        setEndpointFeedback('❌ ' + (data.error || 'Falha ao conectar'));
+      }
+    } catch (err: any) {
+      setEndpointFeedback('❌ Erro na requisição: ' + err.message);
+    } finally {
+      setIsUpdatingEndpoint(false);
+    }
+  };
 
   const fetchQR = async () => {
     try {
@@ -912,12 +951,43 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
                 <p className="text-xs text-zinc-600 max-w-sm">
                   {qrError}
                 </p>
-                <div className="w-full bg-zinc-50 border-2 border-zinc-200 p-3 text-left font-mono text-[11px] text-zinc-700 flex flex-col gap-1.5">
-                  <span className="font-black uppercase text-zinc-950">Como iniciar o microserviço:</span>
-                  <div>1. Abra o terminal na pasta do projeto</div>
-                  <div>2. Execute: <code className="bg-zinc-200 px-1 py-0.5 font-bold text-zinc-950 break-all">cd whatsapp-service && .\start.bat</code></div>
-                  <div>3. Ou inicie o executável: <code className="bg-zinc-200 px-1 py-0.5 font-bold text-zinc-950">whatsapp-service.exe</code></div>
+
+                {/* Formulário Rápido para Atualizar URL do Túnel Cloudflare / Termux */}
+                <div className="w-full bg-amber-50 border-2 border-amber-500 p-3.5 text-left font-mono text-xs flex flex-col gap-2">
+                  <span className="font-black uppercase text-amber-950 flex items-center gap-1.5">
+                    📱 Rodando no celular via Termux?
+                  </span>
+                  <p className="text-[11px] text-amber-900 leading-relaxed">
+                    Ao reiniciar o Termux com <code>pm2 restart all</code>, um <b>novo link do Cloudflare</b> é gerado.
+                    Digite no Termux: <code className="bg-amber-200 px-1 py-0.5 font-bold">pm2 logs whatsapp-tunnel</code> para ver o link e cole abaixo:
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2 mt-1">
+                    <input
+                      type="text"
+                      placeholder="https://exemplo.trycloudflare.com ou http://192.168.0.X:5001"
+                      value={inputEndpointUrl}
+                      onChange={(e) => setInputEndpointUrl(e.target.value)}
+                      className="flex-1 p-2.5 border-2 border-zinc-950 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-[#E5FF00]"
+                    />
+                    <button
+                      type="button"
+                      disabled={isUpdatingEndpoint}
+                      onClick={() => handleSaveEndpoint()}
+                      className="px-4 py-2.5 bg-[#E5FF00] hover:bg-yellow-300 border-2 border-zinc-950 text-zinc-950 font-black uppercase text-xs transition-colors shrink-0"
+                    >
+                      {isUpdatingEndpoint ? 'Conectando...' : 'Conectar'}
+                    </button>
+                  </div>
+                  {endpointFeedback && (
+                    <span className="text-[11px] font-bold text-zinc-900 mt-0.5">{endpointFeedback}</span>
+                  )}
                 </div>
+
+                <div className="w-full bg-zinc-50 border-2 border-zinc-200 p-3 text-left font-mono text-[11px] text-zinc-700 flex flex-col gap-1.5">
+                  <span className="font-black uppercase text-zinc-950">Se estiver rodando no computador:</span>
+                  <div>Execute: <code className="bg-zinc-200 px-1 py-0.5 font-bold text-zinc-950 break-all">cd whatsapp-service && .\start.bat</code></div>
+                </div>
+
                 <button
                   type="button"
                   onClick={fetchQR}
