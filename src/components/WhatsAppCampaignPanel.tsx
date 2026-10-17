@@ -36,9 +36,43 @@ import {
   Filter,
   FileSpreadsheet,
   Copy,
-  Check
+  Check,
+  Volume2,
+  VolumeX,
+  Film,
+  Play
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { WhatsAppLog } from '@/lib/supabase';
+import { soundEngine } from '@/lib/sound-effects';
+import { PromoVideoStudio } from '@/components/PromoVideoStudio';
+
+function OdometerCounter({ value }: { value: number }) {
+  const digits = String(value).split('');
+  return (
+    <span className="inline-flex items-center font-mono font-black text-zinc-950 bg-[#E5FF00]/40 px-1.5 py-0.5 border border-zinc-950 overflow-hidden leading-none">
+      {digits.map((digit, index) => (
+        <span
+          key={index}
+          className="relative inline-block h-[14px] w-[8px] text-center overflow-hidden"
+        >
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.span
+              key={`${index}-${digit}`}
+              initial={{ y: 14, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: -14, opacity: 0 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="inline-block"
+            >
+              {digit}
+            </motion.span>
+          </AnimatePresence>
+        </span>
+      ))}
+    </span>
+  );
+}
 
 interface WhatsAppCampaignPanelProps {
   initialLeads?: (Lead | IndustrialLead)[];
@@ -291,6 +325,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
 
   const handleSaveConfig = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    soundEngine.playMechanicalClick('primary');
     setIsSavingConfig(true);
     setConfigSuccessMsg('');
 
@@ -302,6 +337,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
       });
 
       if (res.ok) {
+        soundEngine.playSentNotification();
         setConfigSuccessMsg('Configurações salvas e ativas com sucesso no microserviço!');
         fetchStatus();
         setTimeout(() => setConfigSuccessMsg(''), 4000);
@@ -335,6 +371,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
   };
 
   const applyPreset = (preset: 'safe' | 'medium' | 'fast' | 'test') => {
+    soundEngine.playMechanicalClick('secondary');
     if (preset === 'safe') {
       setAntiBanConfig(prev => ({
         ...prev,
@@ -431,8 +468,12 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     }
   };
 
-  // 7. Supabase Logs & Histórico
-  const [activeMainTab, setActiveMainTab] = useState<'campaign' | 'logs'>('campaign');
+  // 7. Supabase Logs & Histórico + Motion Design States
+  const [activeMainTab, setActiveMainTab] = useState<'campaign' | 'logs' | 'studio'>('campaign');
+  const [isSoundMuted, setIsSoundMuted] = useState<boolean>(() => soundEngine.getMuted());
+  const [templateFlashKey, setTemplateFlashKey] = useState<number>(0);
+  const [jumpingTag, setJumpingTag] = useState<{ id: number; tag: string } | null>(null);
+  const [justFinishedTyping, setJustFinishedTyping] = useState<boolean>(false);
   const [cloudLogs, setCloudLogs] = useState<WhatsAppLog[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
   const [logsSearch, setLogsSearch] = useState<string>('');
@@ -771,6 +812,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
 
       currentIdx++;
       setDisplayedTypingText(fullText.slice(0, currentIdx));
+      soundEngine.playKeystroke(targetChar === ' ' || targetChar === '\n');
 
       // Cálculo de oscilação humana dinâmica para o próximo caractere
       let nextDelay: number;
@@ -810,6 +852,8 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
 
   // Simulação interativa com cronômetro do tempo de digitação no WhatsApp
   const runLiveTypingSimulation = () => {
+    soundEngine.playMechanicalClick('secondary');
+    setJustFinishedTyping(false);
     const totalSec = parseFloat(estimatedTypingSec);
     setShowSimulatedTyping(true);
     setSimulatedCountdown(totalSec);
@@ -823,8 +867,88 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         clearInterval(timer);
         setShowSimulatedTyping(false);
         setSimulatedCountdown(null);
+        setJustFinishedTyping(true);
+        soundEngine.playSentNotification();
       }
     }, 100);
+  };
+
+  // Simular transição completa nos cartões da Fila: EM ESPERA -> DIGITANDO... -> ENVIADO
+  const handleSimulateQueueFlow = () => {
+    soundEngine.playMechanicalClick('primary');
+    let targetId = selectedLeadId;
+
+    if (leadItems.length === 0) {
+      const demoLeads: CampaignLeadItem[] = [
+        {
+          id: 'demo_virtuosa',
+          lead: {
+            id: 'demo_virtuosa',
+            name: 'CLÍNICA VIRTUOSA - CHAPECÓ PASSO DOS FORTES',
+            whatsapp: '5549999123401',
+            city: 'Chapecó',
+            country: 'Brasil',
+            category: 'Clínicas de Estética',
+          },
+          phone: '5549999123401',
+          selected: true,
+          status: 'queued',
+        },
+        {
+          id: 'demo_odonto',
+          lead: {
+            id: 'demo_odonto',
+            name: 'INSTITUTO ODONTO EXCELLENCE CHAPECÓ',
+            whatsapp: '5549998451120',
+            city: 'Chapecó',
+            country: 'Brasil',
+            category: 'Odontologia',
+          },
+          phone: '5549998451120',
+          selected: true,
+          status: 'queued',
+        },
+        {
+          id: 'demo_derma',
+          lead: {
+            id: 'demo_derma',
+            name: 'CLÍNICA DERMATOLÓGICA SANTA MARIA',
+            whatsapp: '5549991048892',
+            city: 'Chapecó',
+            country: 'Brasil',
+            category: 'Dermatologia',
+          },
+          phone: '5549991048892',
+          selected: true,
+          status: 'queued',
+        },
+      ];
+      setLeadItems(demoLeads);
+      targetId = 'demo_virtuosa';
+      setSelectedLeadId('demo_virtuosa');
+    } else {
+      targetId = selectedLeadId || leadItems[0].id;
+      setLeadItems(prev =>
+        prev.map(it => (it.id === targetId ? { ...it, status: 'queued' } : it))
+      );
+    }
+
+    // 1. Passa de EM ESPERA para ✍️ DIGITANDO... após 800ms
+    setTimeout(() => {
+      setLeadItems(prev =>
+        prev.map(it => (it.id === targetId ? { ...it, status: 'typing' } : it))
+      );
+      setJustFinishedTyping(false);
+    }, 800);
+
+    // 2. Passa de ✍️ DIGITANDO... para ✅ ENVIADO com scale bounce e som após 4200ms
+    setTimeout(() => {
+      setLeadItems(prev =>
+        prev.map(it => (it.id === targetId ? { ...it, status: 'sent' } : it))
+      );
+      setJustFinishedTyping(true);
+      soundEngine.playSentNotification();
+    }, 4200);
   };
 
   // Filtragem da lista
@@ -844,21 +968,35 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
   }, [leadItems]);
 
   const handleToggleSelectAll = (check: boolean) => {
+    soundEngine.playMechanicalClick('checkbox');
     setLeadItems(prev => prev.map(item => ({ ...item, selected: check })));
   };
 
   const handleToggleItem = (id: string) => {
+    soundEngine.playMechanicalClick('checkbox');
     setLeadItems(prev => prev.map(item => 
       item.id === id ? { ...item, selected: !item.selected } : item
     ));
   };
 
+  const applyTemplateWithFlash = (tpl: string) => {
+    soundEngine.playTemplateFlash();
+    setTemplateFlashKey(prev => prev + 1);
+    setMessageTemplate(tpl);
+  };
+
   const insertTag = (tag: string) => {
+    soundEngine.playVariableSnap();
+    setJumpingTag({ id: Date.now(), tag: `{{${tag}}}` });
     setMessageTemplate(prev => prev + ` {{${tag}}}`);
+    setTimeout(() => {
+      setJumpingTag(null);
+    }, 320);
   };
 
   // Disparo em lote para a fila
   const handleStartBatchDispatch = async () => {
+    soundEngine.playShockwave();
     const toSend = leadItems.filter(item => item.selected && item.status !== 'sent');
     if (toSend.length === 0) {
       alert('Nenhum lead selecionado para envio.');
@@ -1290,8 +1428,11 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
           <div className="col-span-2 flex items-center gap-2.5 sm:w-auto">
             <button
               type="button"
-              onClick={() => setShowConfigPanel(prev => !prev)}
-              className={`flex-1 sm:flex-initial min-h-[48px] px-4 py-3 border-2 font-black text-xs font-mono uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              onClick={() => {
+                soundEngine.playMechanicalClick('secondary');
+                setShowConfigPanel(prev => !prev);
+              }}
+              className={`btn-tactile-4 flex-1 sm:flex-initial min-h-[48px] px-4 py-3 border-2 font-black text-xs font-mono uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
                 showConfigPanel 
                   ? 'bg-[#E5FF00] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#fff]' 
                   : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 hover:text-white'
@@ -1303,9 +1444,28 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
             </button>
 
             <button
-              onClick={fetchStatus}
+              type="button"
+              onClick={() => {
+                const next = soundEngine.toggleMute();
+                setIsSoundMuted(next);
+              }}
+              className={`btn-tactile-4 min-h-[48px] min-w-[48px] p-3 border-2 flex items-center justify-center transition-all shrink-0 ${
+                isSoundMuted
+                  ? 'bg-zinc-900 text-zinc-500 border-zinc-700 hover:text-white'
+                  : 'bg-[#25D366] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#E5FF00]'
+              }`}
+              title={isSoundMuted ? 'Ativar Sound Design (Cliques Mecânicos & Digitação)' : 'Silenciar Sound Design'}
+            >
+              {isSoundMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+            </button>
+
+            <button
+              onClick={() => {
+                soundEngine.playMechanicalClick('secondary');
+                fetchStatus();
+              }}
               disabled={isCheckingStatus}
-              className="min-h-[48px] min-w-[48px] p-3 bg-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-700 border-2 border-zinc-700 flex items-center justify-center transition-all shrink-0"
+              className="btn-tactile-4 min-h-[48px] min-w-[48px] p-3 bg-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-700 border-2 border-zinc-700 flex items-center justify-center transition-all shrink-0"
               title="Atualizar status"
             >
               <RefreshCw size={20} className={isCheckingStatus ? 'animate-spin' : ''} />
@@ -1314,14 +1474,17 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         </div>
       </div>
 
-      {/* SELETOR DE ABAS PRINCIPAIS: DISPARADOR vs LOGS SUPABASE */}
-      <div className="flex border-4 border-zinc-950 bg-white p-1.5 shadow-[6px_6px_0_0_#18181B] sm:shadow-[8px_8px_0_0_#18181B] gap-2">
+      {/* SELETOR DE ABAS PRINCIPAIS: DISPARADOR vs LOGS SUPABASE vs STUDIO MOTION 30S */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 border-4 border-zinc-950 bg-white p-1.5 shadow-[6px_6px_0_0_#18181B] sm:shadow-[8px_8px_0_0_#18181B] gap-2">
         <button
           type="button"
-          onClick={() => setActiveMainTab('campaign')}
-          className={`flex-1 min-h-[48px] py-3 px-4 font-black uppercase font-mono text-xs sm:text-sm flex items-center justify-center gap-2 border-2 transition-all ${
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setActiveMainTab('campaign');
+          }}
+          className={`btn-tactile-4 min-h-[48px] py-3 px-4 font-black uppercase font-mono text-xs sm:text-sm flex items-center justify-center gap-2 border-2 transition-all ${
             activeMainTab === 'campaign'
-              ? 'bg-[#E5FF00] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#18181B]'
+              ? 'bg-[#E5FF00] text-zinc-950 border-zinc-950 shadow-[4px_4px_0_0_#18181B]'
               : 'bg-zinc-50 text-zinc-600 border-transparent hover:bg-zinc-100 hover:text-zinc-950'
           }`}
         >
@@ -1331,12 +1494,31 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         <button
           type="button"
           onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setActiveMainTab('studio');
+          }}
+          className={`btn-tactile-4 min-h-[48px] py-3 px-4 font-black uppercase font-mono text-xs sm:text-sm flex items-center justify-center gap-2 border-2 transition-all ${
+            activeMainTab === 'studio'
+              ? 'bg-zinc-950 text-[#E5FF00] border-zinc-950 shadow-[4px_4px_0_0_#25D366]'
+              : 'bg-zinc-50 text-zinc-600 border-transparent hover:bg-zinc-100 hover:text-zinc-950'
+          }`}
+        >
+          <Film size={18} />
+          <span>Storyboard Motion (30s)</span>
+          <span className="bg-[#25D366] text-zinc-950 px-1.5 py-0.5 text-[10px] font-black border border-zinc-950">
+            NOVO
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
             setActiveMainTab('logs');
             fetchLogs();
           }}
-          className={`flex-1 min-h-[48px] py-3 px-4 font-black uppercase font-mono text-xs sm:text-sm flex items-center justify-center gap-2 border-2 transition-all ${
+          className={`btn-tactile-4 min-h-[48px] py-3 px-4 font-black uppercase font-mono text-xs sm:text-sm flex items-center justify-center gap-2 border-2 transition-all ${
             activeMainTab === 'logs'
-              ? 'bg-[#25D366] text-white border-zinc-950 shadow-[2px_2px_0_0_#18181B]'
+              ? 'bg-[#25D366] text-white border-zinc-950 shadow-[4px_4px_0_0_#18181B]'
               : 'bg-zinc-50 text-zinc-600 border-transparent hover:bg-zinc-100 hover:text-zinc-950'
           }`}
         >

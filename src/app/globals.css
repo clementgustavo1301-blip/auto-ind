@@ -37,3 +37,142 @@ body {
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #18181b;
 }
+
+/* ==========================================================================
+   NEO-BRUTALIST MOTION DESIGN SYSTEM (Curva Mecânica & Micro-interações)
+   ========================================================================== */
+
+:root {
+  --ease-brutal: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Botão Tátil Mecânico: pressiona nos eixos X/Y (4px, 4px) e colapsa a sombra a zero */
+.btn-tactile-4 {
+  transition:
+    transform 160ms var(--ease-brutal),
+    box-shadow 160ms var(--ease-brutal),
+    background-color 160ms var(--ease-brutal);
+  will-change: transform, box-shadow;
+}
+.btn-tactile-4:active:not(:disabled) {
+  transform: translate(4px, 4px) !important;
+  box-shadow: 0px 0px 0px 0px #18181b !important;
+}
+
+/* Botão Tátil para sombras de 6px */
+.btn-tactile-6 {
+  transition:
+    transform 180ms var(--ease-brutal),
+    box-shadow 180ms var(--ease-brutal),
+    background-color 180ms var(--ease-brutal);
+  will-change: transform, box-shadow;
+}
+.btn-tactile-6:active:not(:disabled) {
+  transform: translate(4px, 4px) !important;
+  box-shadow: 0px 0px 0px 0px #18181b !important;
+}
+
+/* Pulsação contínua na borda a cada 1,2s para a etiqueta «✍️ DIGITANDO...» */
+@keyframes typing-border-pulse {
+  0%, 100% {
+    border-color: #059669;
+    box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.65);
+  }
+  50% {
+    border-color: #25D366;
+    box-shadow: 0 0 0 5px rgba(37, 211, 102, 0);
+  }
+}
+
+.animate-typing-border-pulse {
+  animation: typing-border-pulse 1.2s var(--ease-brutal) infinite;
+}
+
+/* Scale Bounce (1.0 -> 1.08 -> 1.0) no emblema «✅ ENVIADO» */
+@keyframes sent-scale-bounce {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-sent-bounce {
+  animation: sent-scale-bounce 240ms var(--ease-brutal) forwards;
+}
+
+/* Onda sinusoidal contínua para «Digitando •••» (desfasamento de 150ms) */
+@keyframes whatsapp-sine-wave {
+  0%, 100% {
+    transform: translateY(0px);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.animate-sine-dot-1 {
+  animation: whatsapp-sine-wave 900ms ease-in-out infinite;
+  animation-delay: 0ms;
+}
+.animate-sine-dot-2 {
+  animation: whatsapp-sine-wave 900ms ease-in-out infinite;
+  animation-delay: 150ms;
+}
+.animate-sine-dot-3 {
+  animation: whatsapp-sine-wave 900ms ease-in-out infinite;
+  animation-delay: 300ms;
+}
+
+/* Cursor verde em bloco a piscar a um ritmo constante de 500ms */
+@keyframes block-cursor-blink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0;
+  }
+}
+
+.animate-cursor-500 {
+  animation: block-cursor-blink 500ms steps(2, start) infinite;
+}
+
+/* Flash amarelo-claro ao selecionar um Modelo de Alta Resposta */
+@keyframes template-yellow-flash {
+  0% {
+    background-color: #fef08a;
+  }
+  35% {
+    background-color: rgba(229, 255, 0, 0.35);
+  }
+  100% {
+    background-color: #fafafa;
+  }
+}
+
+.animate-template-flash {
+  animation: template-yellow-flash 250ms var(--ease-brutal) forwards;
+}
+
+/* Respeito à preferência de movimento reduzido */
+@media (prefers-reduced-motion: reduce) {
+  .btn-tactile-4,
+  .btn-tactile-6,
+  .animate-typing-border-pulse,
+  .animate-sent-bounce,
+  .animate-sine-dot-1,
+  .animate-sine-dot-2,
+  .animate-sine-dot-3 {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
