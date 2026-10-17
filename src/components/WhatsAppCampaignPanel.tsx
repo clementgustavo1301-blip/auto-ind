@@ -30,8 +30,15 @@ import {
   QrCode,
   LogOut,
   Zap,
-  X
+  X,
+  Database,
+  Download,
+  Filter,
+  FileSpreadsheet,
+  Copy,
+  Check
 } from 'lucide-react';
+import { WhatsAppLog } from '@/lib/supabase';
 
 interface WhatsAppCampaignPanelProps {
   initialLeads?: (Lead | IndustrialLead)[];
@@ -422,6 +429,74 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     } finally {
       setIsUpdatingEndpoint(false);
     }
+  };
+
+  // 7. Supabase Logs & Histórico
+  const [activeMainTab, setActiveMainTab] = useState<'campaign' | 'logs'>('campaign');
+  const [cloudLogs, setCloudLogs] = useState<WhatsAppLog[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
+  const [logsSearch, setLogsSearch] = useState<string>('');
+  const [logsStatusFilter, setLogsStatusFilter] = useState<string>('all');
+  const [isCopiedSql, setIsCopiedSql] = useState<boolean>(false);
+  const [logsTableMissing, setLogsTableMissing] = useState<boolean>(false);
+
+  const fetchLogs = async () => {
+    try {
+      setIsLoadingLogs(true);
+      const params = new URLSearchParams();
+      if (logsStatusFilter !== 'all') params.set('status', logsStatusFilter);
+      if (logsSearch.trim()) params.set('search', logsSearch.trim());
+      params.set('limit', '100');
+
+      const res = await fetch(`/api/whatsapp/logs?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCloudLogs(data.logs || []);
+        setLogsTableMissing(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        if (err?.error?.includes('whatsapp_logs') || err?.error?.includes('schema cache')) {
+          setLogsTableMissing(true);
+        }
+      }
+    } catch (e) {
+      console.error('Falha ao carregar logs:', e);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeMainTab === 'logs') {
+      fetchLogs();
+    }
+  }, [activeMainTab, logsStatusFilter]);
+
+  const exportLogsToCSV = () => {
+    if (cloudLogs.length === 0) {
+      alert('Nenhum log encontrado para exportar.');
+      return;
+    }
+    const headers = ['Data_Hora', 'Telefone', 'Destinatario', 'Empresa', 'Cidade', 'Setor', 'Status', 'Mensagem', 'Erro'];
+    const rows = cloudLogs.map(l => [
+      l.created_at ? new Date(l.created_at).toLocaleString('pt-BR') : '',
+      l.phone || '',
+      `"${(l.lead_name || '').replace(/"/g, '""')}"`,
+      `"${(l.company || '').replace(/"/g, '""')}"`,
+      `"${(l.city || '').replace(/"/g, '""')}"`,
+      `"${(l.category || '').replace(/"/g, '""')}"`,
+      l.status || '',
+      `"${(l.message || '').replace(/"/g, '""')}"`,
+      `"${(l.error_message || '').replace(/"/g, '""')}"`,
+    ]);
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `whatsapp-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const fetchQR = async () => {
@@ -821,6 +896,10 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
             phone: item.phone,
             message: finalMsg,
             media_url: mediaUrl.trim() || undefined,
+            lead_name: l.name,
+            company: empresaNome,
+            city: l.city,
+            category: l.category,
           }),
         });
 
@@ -1235,6 +1314,42 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         </div>
       </div>
 
+      {/* SELETOR DE ABAS PRINCIPAIS: DISPARADOR vs LOGS SUPABASE */}
+      <div className="flex border-4 border-zinc-950 bg-white p-1.5 shadow-[6px_6px_0_0_#18181B] sm:shadow-[8px_8px_0_0_#18181B] gap-2">
+        <button
+          type="button"
+          onClick={() => setActiveMainTab('campaign')}
+          className={`flex-1 min-h-[48px] py-3 px-4 font-black uppercase font-mono text-xs sm:text-sm flex items-center justify-center gap-2 border-2 transition-all ${
+            activeMainTab === 'campaign'
+              ? 'bg-[#E5FF00] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#18181B]'
+              : 'bg-zinc-50 text-zinc-600 border-transparent hover:bg-zinc-100 hover:text-zinc-950'
+          }`}
+        >
+          <Smartphone size={18} />
+          <span>Disparador & Fila</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setActiveMainTab('logs');
+            fetchLogs();
+          }}
+          className={`flex-1 min-h-[48px] py-3 px-4 font-black uppercase font-mono text-xs sm:text-sm flex items-center justify-center gap-2 border-2 transition-all ${
+            activeMainTab === 'logs'
+              ? 'bg-[#25D366] text-white border-zinc-950 shadow-[2px_2px_0_0_#18181B]'
+              : 'bg-zinc-50 text-zinc-600 border-transparent hover:bg-zinc-100 hover:text-zinc-950'
+          }`}
+        >
+          <Database size={18} />
+          <span>Logs na Nuvem (Supabase)</span>
+          {cloudLogs.length > 0 && (
+            <span className="bg-zinc-950 text-[#E5FF00] px-2 py-0.5 text-[10px] font-black rounded-full">
+              {cloudLogs.length}
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* PAINEL DE CONFIGURAÇÕES ANTI-BAN EXPANSÍVEL */}
       {showConfigPanel && (
         <div className="bg-white border-4 border-zinc-950 p-6 md:p-8 shadow-[10px_10px_0_0_#18181B] flex flex-col gap-6 animate-in fade-in slide-in-from-top-4 duration-300">
@@ -1588,8 +1703,11 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         </div>
       )}
 
-      {/* SUB-NAVEGAÇÃO SEGMENTADA PARA MOBILE / TABLET (< 1024px) */}
-      <div className="grid grid-cols-3 lg:hidden bg-zinc-950 p-1.5 border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] gap-1.5">
+      {/* ABA DE CAMPANHA & DISPARADOR */}
+      {activeMainTab === 'campaign' && (
+        <>
+          {/* SUB-NAVEGAÇÃO SEGMENTADA PARA MOBILE / TABLET (< 1024px) */}
+          <div className="grid grid-cols-3 lg:hidden bg-zinc-950 p-1.5 border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] gap-1.5">
         <button
           type="button"
           onClick={() => setMobileSection('queue')}
@@ -2398,6 +2516,256 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         </div>
 
       </div>
+        </>
+      )}
+
+      {/* ABA DE LOGS & HISTÓRICO SUPABASE */}
+      {activeMainTab === 'logs' && (
+        <div className="bg-white border-4 border-zinc-950 p-4 sm:p-6 md:p-8 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B] flex flex-col gap-6 animate-in fade-in duration-200">
+          {/* Top Bar dos Logs */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b-4 border-zinc-950 pb-6">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 bg-[#25D366] rounded-full inline-block animate-pulse" />
+                <span className="font-mono text-xs uppercase tracking-widest font-black text-zinc-600">
+                  Banco de Dados em Nuvem // Supabase PostgreSQL
+                </span>
+              </div>
+              <h3 className="text-2xl sm:text-3xl font-black uppercase text-zinc-950 mt-1 flex items-center gap-2">
+                <Database size={28} className="text-[#25D366] shrink-0" /> Histórico & Logs de Disparo
+              </h3>
+              <p className="text-xs sm:text-sm font-mono text-zinc-600 mt-1">
+                Registros permanentes na nuvem com status de entrega, mensagens enviadas e diagnósticos.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <button
+                type="button"
+                onClick={exportLogsToCSV}
+                className="px-4 py-2.5 bg-zinc-950 hover:bg-zinc-800 text-[#E5FF00] font-black uppercase font-mono text-xs border-2 border-zinc-950 shadow-[2px_2px_0_0_#18181B] flex items-center gap-2 transition-all active:translate-y-0.5"
+              >
+                <Download size={16} /> Exportar CSV
+              </button>
+              <button
+                type="button"
+                onClick={fetchLogs}
+                disabled={isLoadingLogs}
+                className="px-4 py-2.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-black uppercase font-mono text-xs border-2 border-zinc-950 flex items-center gap-2 transition-all active:translate-y-0.5"
+              >
+                <RefreshCw size={16} className={isLoadingLogs ? 'animate-spin' : ''} /> Atualizar
+              </button>
+            </div>
+          </div>
+
+          {/* Alerta se a tabela ainda não foi criada no Supabase */}
+          {logsTableMissing && (
+            <div className="bg-amber-50 border-4 border-amber-500 p-5 font-mono text-xs flex flex-col gap-3">
+              <div className="flex items-center gap-2 text-amber-950 font-black uppercase text-sm">
+                <AlertCircle size={20} className="text-amber-600 shrink-0" />
+                <span>Tabela "whatsapp_logs" precisa ser criada no Supabase</span>
+              </div>
+              <p className="text-amber-900 leading-relaxed">
+                As credenciais do Supabase foram configuradas com sucesso! Para começar a gravar os logs, abra o <b>SQL Editor</b> no painel do Supabase e execute o script abaixo (o arquivo <code>supabase-schema.sql</code> já foi criado no seu projeto):
+              </p>
+              <div className="relative">
+                <pre className="p-3 bg-zinc-950 text-emerald-400 text-[11px] overflow-x-auto max-h-40 border-2 border-zinc-950 font-mono">
+{`CREATE TABLE IF NOT EXISTS public.whatsapp_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    phone VARCHAR(30) NOT NULL,
+    lead_name VARCHAR(255),
+    company VARCHAR(255),
+    city VARCHAR(100),
+    category VARCHAR(100),
+    message TEXT NOT NULL,
+    status VARCHAR(30) DEFAULT 'queued' NOT NULL,
+    queue_id VARCHAR(100),
+    error_message TEXT,
+    sent_at TIMESTAMP WITH TIME ZONE
+);
+ALTER TABLE public.whatsapp_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Permitir anon" ON public.whatsapp_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);`}
+                </pre>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS public.whatsapp_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    phone VARCHAR(30) NOT NULL,
+    lead_name VARCHAR(255),
+    company VARCHAR(255),
+    city VARCHAR(100),
+    category VARCHAR(100),
+    message TEXT NOT NULL,
+    status VARCHAR(30) DEFAULT 'queued' NOT NULL,
+    queue_id VARCHAR(100),
+    error_message TEXT,
+    sent_at TIMESTAMP WITH TIME ZONE
+);
+ALTER TABLE public.whatsapp_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Permitir anon" ON public.whatsapp_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);`);
+                    setIsCopiedSql(true);
+                    setTimeout(() => setIsCopiedSql(false), 3000);
+                  }}
+                  className="absolute top-2 right-2 px-3 py-1 bg-[#E5FF00] text-zinc-950 font-black uppercase text-[10px] border border-zinc-950 shadow-[2px_2px_0_0_#000]"
+                >
+                  {isCopiedSql ? '✓ Copiado!' : 'Copiar SQL'}
+                </button>
+              </div>
+              <div className="flex items-center gap-3 pt-1 flex-wrap">
+                <a
+                  href="https://supabase.com/dashboard/project/ajufeobrlxxtucoqnhym/sql/new"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-black uppercase text-xs inline-flex items-center gap-1.5"
+                >
+                  <ExternalLink size={14} /> Abrir SQL Editor no Supabase
+                </a>
+                <button
+                  type="button"
+                  onClick={fetchLogs}
+                  className="px-4 py-2 bg-zinc-950 text-white font-black uppercase text-xs"
+                >
+                  Já executei, testar agora
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Cards de Resumo */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+            <div className="bg-zinc-50 border-2 border-zinc-950 p-3 sm:p-4 flex flex-col gap-1 shadow-[3px_3px_0_0_#18181B]">
+              <span className="text-[10px] font-mono uppercase font-bold text-zinc-500">Total Gravados</span>
+              <span className="text-xl sm:text-2xl font-mono font-black text-zinc-950">{cloudLogs.length}</span>
+            </div>
+            <div className="bg-emerald-50 border-2 border-emerald-600 p-3 sm:p-4 flex flex-col gap-1 shadow-[3px_3px_0_0_#059669]">
+              <span className="text-[10px] font-mono uppercase font-bold text-emerald-700">Enviados com Sucesso</span>
+              <span className="text-xl sm:text-2xl font-mono font-black text-emerald-800">
+                {cloudLogs.filter(l => l.status === 'sent').length}
+              </span>
+            </div>
+            <div className="bg-red-50 border-2 border-red-600 p-3 sm:p-4 flex flex-col gap-1 shadow-[3px_3px_0_0_#DC2626]">
+              <span className="text-[10px] font-mono uppercase font-bold text-red-700">Falhas / Inválidos</span>
+              <span className="text-xl sm:text-2xl font-mono font-black text-red-800">
+                {cloudLogs.filter(l => l.status === 'failed').length}
+              </span>
+            </div>
+            <div className="bg-amber-50 border-2 border-amber-600 p-3 sm:p-4 flex flex-col gap-1 shadow-[3px_3px_0_0_#D97706]">
+              <span className="text-[10px] font-mono uppercase font-bold text-amber-700">Na Fila / Pendentes</span>
+              <span className="text-xl sm:text-2xl font-mono font-black text-amber-800">
+                {cloudLogs.filter(l => l.status === 'queued' || l.status === 'typing').length}
+              </span>
+            </div>
+          </div>
+
+          {/* Filtros e Busca */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-zinc-50 border-2 border-zinc-950 p-3">
+            <div className="flex-1 relative">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input
+                type="text"
+                placeholder="Buscar por telefone, nome do lead ou empresa..."
+                value={logsSearch}
+                onChange={(e) => setLogsSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') fetchLogs(); }}
+                className="w-full pl-9 pr-3 py-2 border-2 border-zinc-950 font-mono text-xs bg-white focus:outline-none focus:ring-2 focus:ring-[#E5FF00]"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                { id: 'all', label: 'Todos' },
+                { id: 'sent', label: '✅ Enviados' },
+                { id: 'failed', label: '❌ Falhas' },
+                { id: 'queued', label: '⏳ Na Fila' },
+              ].map(f => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setLogsStatusFilter(f.id)}
+                  className={`px-3 py-1.5 font-mono text-xs font-bold uppercase border-2 border-zinc-950 transition-colors ${
+                    logsStatusFilter === f.id
+                      ? 'bg-[#E5FF00] text-zinc-950'
+                      : 'bg-white text-zinc-700 hover:bg-zinc-100'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Lista de Registros */}
+          <div className="flex flex-col gap-2.5">
+            {isLoadingLogs ? (
+              <div className="py-16 text-center font-mono text-sm text-zinc-500 flex flex-col items-center gap-2">
+                <RefreshCw size={24} className="animate-spin text-zinc-800" />
+                <span>Consultando registros no Supabase...</span>
+              </div>
+            ) : cloudLogs.length === 0 ? (
+              <div className="py-16 text-center font-mono border-2 border-dashed border-zinc-300 p-8 flex flex-col items-center gap-3">
+                <Database size={40} className="text-zinc-400" />
+                <span className="font-bold text-zinc-700 text-sm uppercase">Nenhum registro encontrado</span>
+                <p className="text-xs text-zinc-500 max-w-sm">
+                  Cada disparo efetuado na aba "Disparador & Fila" será automaticamente gravado aqui na nuvem com status em tempo real.
+                </p>
+              </div>
+            ) : (
+              cloudLogs.map(log => (
+                <div
+                  key={log.id}
+                  className="bg-white border-2 border-zinc-950 p-4 shadow-[3px_3px_0_0_#18181B] flex flex-col gap-2 font-mono"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-100 pb-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {log.status === 'sent' && (
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-600 text-[10px] font-black uppercase flex items-center gap-1">
+                          <CheckCheck size={12} /> Enviado
+                        </span>
+                      )}
+                      {log.status === 'failed' && (
+                        <span className="px-2 py-0.5 bg-red-100 text-red-800 border border-red-600 text-[10px] font-black uppercase flex items-center gap-1">
+                          <AlertCircle size={12} /> Falha
+                        </span>
+                      )}
+                      {log.status === 'queued' && (
+                        <span className="px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-600 text-[10px] font-black uppercase flex items-center gap-1">
+                          <Clock size={12} /> Na Fila
+                        </span>
+                      )}
+                      {log.status === 'typing' && (
+                        <span className="px-2 py-0.5 bg-blue-100 text-blue-800 border border-blue-600 text-[10px] font-black uppercase">
+                          ✍️ Digitando
+                        </span>
+                      )}
+
+                      <span className="font-black text-xs text-zinc-900">{formatPhoneDisplay(log.phone)}</span>
+                      {log.lead_name && <span className="text-xs text-zinc-700">• {log.lead_name}</span>}
+                      {log.company && <span className="text-xs font-bold text-zinc-900 font-sans">({log.company})</span>}
+                    </div>
+
+                    <div className="text-[11px] text-zinc-500 font-bold shrink-0">
+                      {log.created_at ? new Date(log.created_at).toLocaleString('pt-BR') : ''}
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-zinc-800 whitespace-pre-wrap leading-relaxed bg-zinc-50 p-2.5 border border-zinc-200">
+                    {log.message}
+                  </p>
+
+                  {log.error_message && (
+                    <div className="text-[11px] text-red-700 bg-red-50 p-2 border border-red-300 font-bold">
+                      ⚠️ Erro: {log.error_message}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
