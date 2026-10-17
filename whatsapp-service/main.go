@@ -1074,6 +1074,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 func handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if appManager.client != nil {
+		appManager.client.RemoveEventHandlers()
 		if appManager.client.IsConnected() && appManager.client.IsLoggedIn() {
 			logoutCtx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			_ = appManager.client.Logout(logoutCtx)
@@ -1125,21 +1126,29 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 
 // newClient cria um dispositivo limpo (necessário após logout, pois o anterior é invalidado)
 func (s *ServiceManager) newClient() {
-	if s.client != nil {
-		if s.client.Store != nil && s.client.Store.ID != nil {
-			_ = s.client.Store.Delete(context.Background())
+	s.pairMu.Lock()
+	oldClient := s.client
+	if oldClient != nil {
+		oldClient.RemoveEventHandlers()
+		if oldClient.Store != nil && oldClient.Store.ID != nil {
+			_ = oldClient.Store.Delete(context.Background())
 		}
-		s.client.Disconnect()
-		s.client.RemoveEventHandlers()
+		oldClient.Disconnect()
 	}
 	device := s.container.NewDevice()
-	s.client = whatsmeow.NewClient(device, waLog.Stdout("WhatsApp", "INFO", true))
-	s.client.AddEventHandler(s.handleEvent)
+	newCli := whatsmeow.NewClient(device, waLog.Stdout("WhatsApp", "INFO", true))
+	newCli.AddEventHandler(s.handleEvent)
+	s.client = newCli
+	s.pairMu.Unlock()
 }
 
 // startPairing mantém um QR válido até o login. Apenas uma instância roda por vez.
 // reset=true descarta o aparelho atual (usar somente após logout explícito).
 func (s *ServiceManager) startPairing(reset bool) {
+	if reset {
+		s.newClient()
+	}
+
 	s.pairMu.Lock()
 	if s.pairing {
 		s.pairMu.Unlock()
@@ -1153,25 +1162,30 @@ func (s *ServiceManager) startPairing(reset bool) {
 		s.pairMu.Unlock()
 	}()
 
-	if reset {
-		s.newClient()
-	}
-
 	for s.ctx.Err() == nil {
-		if s.client.IsConnected() && s.client.IsLoggedIn() && s.client.Store != nil && s.client.Store.ID != nil {
-			return
-		}
-		if s.client.IsConnected() {
-			s.client.Disconnect()
-		}
+		s.pairMu.Lock()
+		cli := s.client
+		s.pairMu.Unlock()
 
-		qrChan, err := s.client.GetQRChannel(s.ctx)
-		if err != nil {
-			log.Printf("⚠️ [QR Code] Falha ao abrir canal de QR: %v. Tentando novamente...", err)
-			time.Sleep(3 * time.Second)
+		if cli == nil {
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		if err := s.client.Connect(); err != nil {
+		if cli.IsConnected() && cli.IsLoggedIn() && cli.Store != nil && cli.Store.ID != nil {
+			return
+		}
+		if cli.IsConnected() {
+			cli.Disconnect()
+		}
+
+		qrChan, err := cli.GetQRChannel(s.ctx)
+		if err != nil {
+			log.Printf("⚠️ [QR Code] Falha ao abrir canal de QR: %v. Recriando cliente...", err)
+			s.newClient()
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if err := cli.Connect(); err != nil {
 			log.Printf("⚠️ [QR Code] Falha ao conectar: %v. Tentando novamente...", err)
 			time.Sleep(3 * time.Second)
 			continue
@@ -1199,7 +1213,7 @@ func (s *ServiceManager) startPairing(reset bool) {
 			}
 		}
 
-		s.client.Disconnect()
+		cli.Disconnect()
 		time.Sleep(time.Second)
 	}
 }
