@@ -15,7 +15,8 @@ import {
   getAutomationLeads
 } from './automation';
 import { sendWhatsAppMessage, getWhatsAppInbound, clearWhatsAppInbound } from './whatsapp';
-import { toDialablePhone, isSamePhone, cleanPhoneDigits } from './phone';
+import { toDialablePhone, isSamePhone, cleanPhoneDigits, isWhatsAppGroup } from './phone';
+import { isBlacklistedPhone } from './phoneBlacklist';
 import { supabase } from './supabase';
 
 interface AIQualificationResult {
@@ -267,6 +268,18 @@ export async function processIncomingWhatsAppMessage(
   const normalizedPhone = toDialablePhone(rawPhone);
   const trimmedText = (incomingText || '').trim();
 
+  // 1. Bloqueio estrito de grupos, comunidades e canais do WhatsApp
+  if (isWhatsAppGroup(rawPhone) || isWhatsAppGroup(cleanIncoming) || isWhatsAppGroup(normalizedPhone)) {
+    console.log(`[AI SDR] Mensagem de grupo do WhatsApp ignorada (${rawPhone}). A IA não participa de grupos.`);
+    return { success: true, replied: false };
+  }
+
+  // 2. Bloqueio permanente de contatos excluídos do pipeline
+  if (isBlacklistedPhone(rawPhone) || isBlacklistedPhone(cleanIncoming) || isBlacklistedPhone(normalizedPhone)) {
+    console.log(`[AI SDR] Mensagem recebida de contato excluído/bloqueado (${rawPhone}). Ignorando silenciosamente.`);
+    return { success: true, replied: false };
+  }
+
   // Deduplicação em janela de 15 segundos para evitar que Webhook e Polling executem a mesma mensagem
   const dedupKey = `${cleanIncoming}:${trimmedText.toLowerCase()}`;
   const lastSeen = recentInboundSignatures.get(dedupKey) || 0;
@@ -279,54 +292,48 @@ export async function processIncomingWhatsAppMessage(
   
   // Localiza o lead usando comparação inteligente de número
   const lead = leads.find(l => isSamePhone(l.phone, rawPhone));
-  const targetPhone = lead ? lead.phone : normalizedPhone;
-  const nowIso = new Date().toISOString();
 
-  // Registra mensagem recebida no histórico
-  await addAutomationMessage(targetPhone, 'inbound', 'lead', trimmedText);
-
-  // Se o lead não existir no pipeline de automação, cria um registro persistido
-  let currentLead: AutomationLead = lead || {
-    id: randomUUID(),
-    company_name: `Lead WhatsApp (+${cleanIncoming})`,
-    phone: targetPhone,
-    city: 'Brasil',
-    state: 'BR',
-    segment: 'Indústria / Geral',
-    source: 'inbound_whatsapp',
-    status: 'chatting',
-    interest_level: 'unknown',
-    human_takeover: false,
-    last_reply_at: nowIso,
-    created_at: nowIso
-  };
-
-  if (!lead && supabase) {
-    try {
-      await supabase.from('automation_leads').insert([currentLead]);
-    } catch (insertErr) {
-      console.warn('[AI SDR] Falha ao criar novo lead recebido no Supabase:', insertErr);
-    }
+  // 3. REGRA CRÍTICA: A IA SDR DEVE RESPONDER EXCLUSIVAMENTE A LEADS CADASTRADOS NO PIPELINE!
+  // Contatos pessoais, conversas externas, grupos ou contatos que foram excluídos NUNCA são respondidos nem cadastrados.
+  if (!lead) {
+    console.log(`[AI SDR] Contato ${rawPhone} não é um lead cadastrado no pipeline (ou foi excluído). Mensagem ignorada.`);
+    return { success: true, replied: false };
   }
 
-  // Se o operador humano já assumiu a conversa, a IA NÃO deve responder automaticamente
-  if (currentLead.human_takeover) {
+  // 4. Se o telefone do lead estiver na lista de exclusão/bloqueio
+  if (isBlacklistedPhone(lead.phone)) {
+    console.log(`[AI SDR] Lead ${lead.company_name} (${lead.phone}) está na lista de exclusão. Nenhuma resposta será enviada.`);
+    return { success: true, replied: false };
+  }
+
+  const targetPhone = lead.phone;
+  const nowIso = new Date().toISOString();
+
+  // 5. Se o operador humano já assumiu a conversa, a IA NÃO deve responder automaticamente
+  if (lead.human_takeover) {
+    await addAutomationMessage(targetPhone, 'inbound', 'lead', trimmedText);
     await updateAutomationLead(targetPhone, {
       last_reply_at: nowIso,
       status: 'chatting'
     });
-    await addAutomationLog('reply', `💬 Resposta recebida de ${currentLead.company_name} (Operador no controle - IA não respondeu): "${trimmedText}"`, targetPhone);
-    return { success: true, replied: false, lead: currentLead };
+    await addAutomationLog('reply', `💬 Resposta recebida de ${lead.company_name} (Operador no controle - IA não respondeu): "${trimmedText}"`, targetPhone);
+    return { success: true, replied: false, lead };
   }
 
-  // 🛡️ Se o contato JÁ ESTÁ desqualificado, a IA NÃO deve enviar novas mensagens
-  if (currentLead.status === 'disqualified') {
+  // 6. 🛡️ Se o contato JÁ ESTÁ desqualificado, a IA NÃO deve enviar novas mensagens
+  if (lead.status === 'disqualified' || lead.interest_level === 'none') {
+    await addAutomationMessage(targetPhone, 'inbound', 'lead', trimmedText);
     await updateAutomationLead(targetPhone, {
       last_reply_at: nowIso
     });
-    await addAutomationLog('reply', `💬 Mensagem de contato desqualificado (${currentLead.company_name}): "${trimmedText.slice(0, 80)}" (IA não responde contatos desqualificados)`, targetPhone);
-    return { success: true, replied: false, lead: currentLead };
+    await addAutomationLog('reply', `💬 Mensagem de contato desqualificado (${lead.company_name}): "${trimmedText.slice(0, 80)}" (IA não responde contatos desqualificados)`, targetPhone);
+    return { success: true, replied: false, lead };
   }
+
+  // Registra mensagem recebida no histórico apenas para leads legítimos e ativos
+  await addAutomationMessage(targetPhone, 'inbound', 'lead', trimmedText);
+
+  const currentLead: AutomationLead = lead;
 
   const settings = await getAutomationSettings();
   const history = await getAutomationMessages(targetPhone);

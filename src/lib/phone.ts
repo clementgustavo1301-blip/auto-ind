@@ -98,6 +98,31 @@ export function toDialablePhone(raw: string): string {
   return international ? `+${digits}` : `+${digits}`;
 }
 
+/**
+ * Detecta se o identificador pertence a um grupo, comunidade ou canal do WhatsApp
+ */
+export function isWhatsAppGroup(phoneOrJid?: string | null): boolean {
+  if (!phoneOrJid) return false;
+  const raw = phoneOrJid.toLowerCase().trim();
+  if (raw.includes('@g.us') || raw.includes('@broadcast') || raw.includes('@newsletter')) {
+    return true;
+  }
+  const digits = cleanPhoneDigits(raw);
+  // JIDs modernos de comunidades/grupos do WhatsApp iniciam com 120363 e têm 18+ dígitos
+  if (digits.startsWith('120363') || digits.startsWith('12036')) {
+    return true;
+  }
+  // Grupos legados têm traço (ex: 55119999-123456@g.us)
+  if (raw.includes('-') && digits.length > 14) {
+    return true;
+  }
+  // Segundo padrão internacional ITU E.164, nenhum telefone válido possui mais de 15 dígitos
+  if (digits.length > 15) {
+    return true;
+  }
+  return false;
+}
+
 /** Renders a phone for display with exactly one leading "+". */
 export function formatPhoneDisplay(phone: string): string {
   const digits = (phone || '').replace(/\D/g, '');

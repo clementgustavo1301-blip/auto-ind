@@ -98,12 +98,37 @@ export async function clearWhatsAppQueue(phone?: string): Promise<boolean> {
   }
 }
 
+import { isBlacklistedPhone } from './phoneBlacklist';
+import { isWhatsAppGroup } from './phone';
+
 /**
  * Enfileira uma mensagem para disparo sequencial humanizado
  */
 export async function sendWhatsAppMessage(
   params: WhatsAppSendOptions
 ): Promise<WhatsAppSendResponse> {
+  if (isWhatsAppGroup(params.phone)) {
+    console.warn(`[WhatsApp Block] Disparo evitado: ${params.phone} é um grupo ou canal do WhatsApp.`);
+    return {
+      success: false,
+      queued: false,
+      queue_id: '',
+      queue_position: -1,
+      message: 'Envio para grupos do WhatsApp não é permitido.',
+    };
+  }
+
+  if (isBlacklistedPhone(params.phone)) {
+    console.warn(`[WhatsApp Block] Disparo abortado: o contato ${params.phone} foi excluído do sistema.`);
+    return {
+      success: false,
+      queued: false,
+      queue_id: '',
+      queue_position: -1,
+      message: 'Contato excluído: envios permanentemente bloqueados.',
+    };
+  }
+
   const digits = (params.phone || '').replace(/\D/g, '');
   if (!digits) {
     return {

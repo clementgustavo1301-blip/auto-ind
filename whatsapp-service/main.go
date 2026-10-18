@@ -496,7 +496,18 @@ func calculateTypingDuration(text string, cfg AntiBanConfig) time.Duration {
 	return time.Duration(finalMs) * time.Millisecond
 }
 
-func (s *ServiceManager) simulateHumanTyping(ctx context.Context, targetJID types.JID, message string, cfg AntiBanConfig) {
+func (s *ServiceManager) simulateHumanTyping(ctx context.Context, item *QueueItem, targetJID types.JID, message string, cfg AntiBanConfig) bool {
+	isCancelled := func() bool {
+		s.queueMu.RLock()
+		defer s.queueMu.RUnlock()
+		return item != nil && item.Status == "failed"
+	}
+
+	if isCancelled() {
+		_ = s.client.SendChatPresence(ctx, targetJID, types.ChatPresencePaused, types.ChatPresenceMediaText)
+		return false
+	}
+
 	totalDuration := calculateTypingDuration(message, cfg)
 	totalSec := totalDuration.Seconds()
 
@@ -516,7 +527,12 @@ func (s *ServiceManager) simulateHumanTyping(ctx context.Context, targetJID type
 		select {
 		case <-time.After(burst1):
 		case <-ctx.Done():
-			return
+			return false
+		}
+
+		if isCancelled() {
+			_ = s.client.SendChatPresence(ctx, targetJID, types.ChatPresencePaused, types.ChatPresenceMediaText)
+			return false
 		}
 
 		// Micro-pausa de reflexão humana (presença pausada)
@@ -525,7 +541,11 @@ func (s *ServiceManager) simulateHumanTyping(ctx context.Context, targetJID type
 		select {
 		case <-time.After(microPause):
 		case <-ctx.Done():
-			return
+			return false
+		}
+
+		if isCancelled() {
+			return false
 		}
 
 		// Rajada 2: Retomando digitação...
@@ -534,7 +554,7 @@ func (s *ServiceManager) simulateHumanTyping(ctx context.Context, targetJID type
 		select {
 		case <-time.After(burst2):
 		case <-ctx.Done():
-			return
+			return false
 		}
 	} else {
 		// Mensagens mais curtas: digitação contínua
@@ -542,8 +562,13 @@ func (s *ServiceManager) simulateHumanTyping(ctx context.Context, targetJID type
 		select {
 		case <-time.After(totalDuration):
 		case <-ctx.Done():
-			return
+			return false
 		}
+	}
+
+	if isCancelled() {
+		_ = s.client.SendChatPresence(ctx, targetJID, types.ChatPresencePaused, types.ChatPresenceMediaText)
+		return false
 	}
 
 	// Envia pausa de presença ao encerrar o texto
@@ -555,8 +580,10 @@ func (s *ServiceManager) simulateHumanTyping(ctx context.Context, targetJID type
 	select {
 	case <-time.After(time.Duration(naturalPauseMs) * time.Millisecond):
 	case <-ctx.Done():
-		return
+		return false
 	}
+
+	return !isCancelled()
 }
 
 func (s *ServiceManager) downloadAndUploadMedia(ctx context.Context, mediaURL string, caption string) (*waE2E.Message, error) {
@@ -720,6 +747,11 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 
 	// 4. Início da Simulação de Digitação Humanizada
 	s.queueMu.Lock()
+	if item.Status == "failed" {
+		s.queueMu.Unlock()
+		log.Printf("🛑 [Envio Cancelado] Item %s foi cancelado antes da digitação. Abortando envio.", item.ID)
+		return
+	}
 	item.Status = "typing"
 	s.queueMu.Unlock()
 
@@ -730,7 +762,11 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 		typingCfg.MaxTypingSec = 10
 		typingCfg.TypingSpeedMs = 90
 	}
-	s.simulateHumanTyping(ctx, targetJID, item.Message, typingCfg)
+	completed := s.simulateHumanTyping(ctx, item, targetJID, item.Message, typingCfg)
+	if !completed {
+		log.Printf("🛑 [Envio Cancelado] Item %s cancelado durante a simulação de digitação. Abortando envio.", item.ID)
+		return
+	}
 
 	// 5. Montagem do Payload (Texto ou Mídia)
 	var waMsg *waE2E.Message
@@ -747,7 +783,16 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 		waMsg = &waE2E.Message{Conversation: proto.String(item.Message)}
 	}
 
-	// 6. Disparo Real no WhatsApp
+	// 6. Verificação final de cancelamento antes do disparo real
+	s.queueMu.Lock()
+	if item.Status == "failed" {
+		s.queueMu.Unlock()
+		log.Printf("🛑 [Envio Cancelado] Item %s cancelado antes do disparo. Abortando envio.", item.ID)
+		return
+	}
+	s.queueMu.Unlock()
+
+	// Disparo Real no WhatsApp
 	log.Printf("📤 [Disparo] Enviando mensagem %s para %s...", item.ID, targetJID)
 	sendResp, err := s.client.SendMessage(ctx, targetJID, waMsg)
 	if err != nil {
@@ -987,6 +1032,13 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	if req.Phone == "" || req.Message == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "Campos 'phone' e 'message' são obrigatórios."})
+		return
+	}
+
+	phoneDigits := digitsOnly(req.Phone)
+	if strings.Contains(req.Phone, "@g.us") || strings.HasPrefix(phoneDigits, "120363") || len(phoneDigits) > 15 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "Envio para grupos do WhatsApp não é permitido."})
 		return
 	}
 
@@ -1376,7 +1428,17 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 	case *events.PairError:
 		log.Printf("❌ [WhatsApp] Erro no pareamento: %v", evt.Error)
 	case *events.Message:
-		if evt.Info.IsFromMe || evt.Info.IsGroup || evt.Info.Chat.Server == "g.us" || evt.Info.Chat.Server == "broadcast" {
+		chatStr := evt.Info.Chat.String()
+		senderStr := evt.Info.Sender.String()
+		chatDigits := digitsOnly(evt.Info.Chat.User)
+		senderDigits := digitsOnly(evt.Info.Sender.User)
+
+		if evt.Info.IsFromMe || evt.Info.IsGroup ||
+			evt.Info.Chat.Server == "g.us" || evt.Info.Chat.Server == "broadcast" || evt.Info.Chat.Server == "newsletter" ||
+			evt.Info.Sender.Server == "g.us" ||
+			strings.Contains(chatStr, "@g.us") || strings.Contains(senderStr, "@g.us") ||
+			strings.HasPrefix(evt.Info.Chat.User, "120363") || strings.HasPrefix(evt.Info.Sender.User, "120363") ||
+			len(chatDigits) > 15 || len(senderDigits) > 15 {
 			return
 		}
 

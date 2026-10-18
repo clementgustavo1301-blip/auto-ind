@@ -10,9 +10,23 @@ import {
   InterestLevel
 } from '@/types';
 import { scrapeSerpAPI } from './outscraper';
-import { filterLeadsWithWhatsApp, toDialablePhone, isSamePhone, cleanPhoneDigits, formatPhoneDisplay } from './phone';
+import { filterLeadsWithWhatsApp, toDialablePhone, isSamePhone, cleanPhoneDigits, formatPhoneDisplay, isWhatsAppGroup } from './phone';
+import { 
+  isBlacklistedPhone, 
+  addPhoneToBlacklist, 
+  loadBlacklistedPhones, 
+  removePhoneFromBlacklist, 
+  getBlacklistedPhones 
+} from './phoneBlacklist';
 import { sendWhatsAppMessage, getWhatsAppQueue, clearWhatsAppQueue } from './whatsapp';
 import { interpolateVariables } from './templateInterpolation';
+
+export { 
+  isBlacklistedPhone, 
+  addPhoneToBlacklist, 
+  removePhoneFromBlacklist, 
+  getBlacklistedPhones 
+};
 
 export interface AutomationProfilePreset {
   id: 'gustavo' | 'sergio';
@@ -99,7 +113,8 @@ export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   ai_provider: 'gemini',
   ai_api_key: '',
   ai_model: 'gemini-3.5-flash-lite',
-  ai_prompt: AUTOMATION_PROFILES.gustavo.ai_prompt
+  ai_prompt: AUTOMATION_PROFILES.gustavo.ai_prompt,
+  excluded_phones: []
 };
 
 // Fallback em memória para execução contínua caso as tabelas ainda estejam sendo criadas no Supabase
@@ -128,12 +143,16 @@ export async function getAutomationSettings(): Promise<AutomationSettings> {
         .maybeSingle();
 
       if (!error && data) {
+        if (Array.isArray(data.excluded_phones)) {
+          loadBlacklistedPhones(data.excluded_phones);
+        }
         inMemorySettings = {
           ...DEFAULT_AUTOMATION_SETTINGS,
           ...data,
           target_segments: data.target_segments || DEFAULT_AUTOMATION_SETTINGS.target_segments,
           target_cities: data.target_cities || DEFAULT_AUTOMATION_SETTINGS.target_cities,
-          ai_api_key: data.ai_api_key || process.env.GEMINI_API_KEY || ''
+          ai_api_key: data.ai_api_key || process.env.GEMINI_API_KEY || '',
+          excluded_phones: Array.isArray(data.excluded_phones) ? data.excluded_phones : []
         };
         return inMemorySettings;
       }
@@ -263,7 +282,7 @@ export async function getAutomationLeads(): Promise<AutomationLead[]> {
           .order('created_at', { ascending: false });
 
         if (!error && data) {
-          inMemoryLeads = data as AutomationLead[];
+          inMemoryLeads = (data as AutomationLead[]).filter(l => !isBlacklistedPhone(l.phone) && !isWhatsAppGroup(l.phone));
           return inMemoryLeads;
         }
       } catch {
@@ -271,20 +290,21 @@ export async function getAutomationLeads(): Promise<AutomationLead[]> {
       }
     }
   }
-  return inMemoryLeads;
+  return inMemoryLeads.filter(l => !isBlacklistedPhone(l.phone) && !isWhatsAppGroup(l.phone));
 }
 
 /**
  * Salva ou atualiza leads no Supabase com resiliência a instabilidades de rede, cold start e duplicidades
  */
 async function saveLeadsToSupabaseWithRetry(leadsToSave: AutomationLead[]): Promise<boolean> {
-  if (!supabase || leadsToSave.length === 0) return false;
+  const sanitizedLeads = leadsToSave.filter(l => !isBlacklistedPhone(l.phone) && !isWhatsAppGroup(l.phone));
+  if (!supabase || sanitizedLeads.length === 0) return false;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const { error } = await supabase
         .from('automation_leads')
-        .upsert(leadsToSave, { onConflict: 'phone', ignoreDuplicates: true });
+        .upsert(sanitizedLeads, { onConflict: 'phone', ignoreDuplicates: true });
 
       if (!error) {
         return true;
@@ -471,12 +491,49 @@ export async function deleteAutomationLead(options: { id?: string; phone?: strin
   const { id, phone } = options;
   if (!id && !phone) return false;
 
-  // Localiza o lead na memória
-  const targetLead = inMemoryLeads.find(l => (id && l.id === id) || (phone && (l.phone === phone || isSamePhone(l.phone, phone))));
+  // Localiza o lead na memória ou no Supabase para identificar telefone e dados
+  let targetLead = inMemoryLeads.find(l => (id && l.id === id) || (phone && (l.phone === phone || isSamePhone(l.phone, phone))));
+  
+  if (!targetLead && supabase && id) {
+    try {
+      const { data } = await supabase.from('automation_leads').select('*').eq('id', id).maybeSingle();
+      if (data) targetLead = data as AutomationLead;
+    } catch {
+      // Continua
+    }
+  }
+
   const targetPhone = targetLead ? targetLead.phone : (phone || '');
   const targetId = targetLead ? targetLead.id : id;
 
-  // 1. Remove da memória local
+  // 1. Adiciona o telefone à blacklist permanente para parar imediatamente qualquer disparo ou resposta
+  if (targetPhone) {
+    addPhoneToBlacklist(targetPhone);
+    const currentExcluded = inMemorySettings.excluded_phones || [];
+    if (!currentExcluded.some(p => isSamePhone(p, targetPhone))) {
+      inMemorySettings.excluded_phones = [...currentExcluded, toDialablePhone(targetPhone) || targetPhone];
+      // Salva de forma persistente nas configurações da automação
+      if (supabase) {
+        supabase.from('automation_settings').update({
+          excluded_phones: inMemorySettings.excluded_phones,
+          updated_at: new Date().toISOString()
+        }).neq('id', '00000000-0000-0000-0000-000000000000').then(() => {}, () => {});
+      }
+    }
+  }
+
+  // 2. Se estava simulando digitação para este contato, cancela imediatamente no painel
+  const currentTyping = getCurrentlyTyping();
+  if (currentTyping && targetPhone && isSamePhone(currentTyping.phone, targetPhone)) {
+    setCurrentlyTyping(null);
+  }
+
+  // 3. Cancela imediatamente qualquer mensagem enfileirada ou em digitação no microserviço Go WhatsApp
+  if (targetPhone) {
+    await clearWhatsAppQueue(targetPhone).catch(() => false);
+  }
+
+  // 4. Remove da memória local (leads e mensagens)
   inMemoryLeads = inMemoryLeads.filter(l => {
     if (targetId && l.id === targetId) return false;
     if (targetPhone && isSamePhone(l.phone, targetPhone)) return false;
@@ -485,17 +542,42 @@ export async function deleteAutomationLead(options: { id?: string; phone?: strin
 
   if (targetPhone) {
     inMemoryMessages = inMemoryMessages.filter(m => !isSamePhone(m.lead_phone, targetPhone));
-    // Limpa fila do WhatsApp microservice se houver mensagem pendente
-    await clearWhatsAppQueue(targetPhone).catch(() => false);
   }
 
-  // 2. Remove do Supabase
+  // 5. Exclui definitivamente do banco de dados Supabase
   if (supabase) {
     try {
-      if (targetId) {
-        await supabase.from('automation_leads').delete().eq('id', targetId);
+      // 5.1 Busca IDs dos leads correspondentes no Supabase para deletar com 100% de precisão por ID
+      const { data: dbLeads } = await supabase.from('automation_leads').select('id, phone');
+      const leadIdsToDelete: string[] = [];
+      if (targetId) leadIdsToDelete.push(targetId);
+      if (dbLeads) {
+        for (const dl of dbLeads) {
+          if ((targetId && dl.id === targetId) || (targetPhone && isSamePhone(dl.phone, targetPhone))) {
+            if (!leadIdsToDelete.includes(dl.id)) {
+              leadIdsToDelete.push(dl.id);
+            }
+          }
+        }
       }
+
+      if (leadIdsToDelete.length > 0) {
+        await supabase.from('automation_leads').delete().in('id', leadIdsToDelete);
+      }
+
+      // 5.2 Busca IDs das mensagens trocadas com este telefone e deleta por ID
       if (targetPhone) {
+        const { data: dbMsgs } = await supabase.from('automation_messages').select('id, lead_phone');
+        if (dbMsgs && dbMsgs.length > 0) {
+          const msgIdsToDelete = dbMsgs
+            .filter(m => isSamePhone(m.lead_phone, targetPhone))
+            .map(m => m.id);
+          if (msgIdsToDelete.length > 0) {
+            await supabase.from('automation_messages').delete().in('id', msgIdsToDelete);
+          }
+        }
+
+        // Defesa em profundidade adicional
         const digits = cleanPhoneDigits(targetPhone);
         const normalized = toDialablePhone(targetPhone);
         await supabase.from('automation_leads').delete().or(`phone.eq.${targetPhone},phone.eq.${normalized},phone.eq.+${digits},phone.eq.${digits}`);
@@ -506,9 +588,8 @@ export async function deleteAutomationLead(options: { id?: string; phone?: strin
     }
   }
 
-  if (targetLead) {
-    await addAutomationLog('system', `🗑️ Lead "${targetLead.company_name}" (${formatPhoneDisplay(targetLead.phone)}) foi excluído.`);
-  }
+  const companyName = targetLead ? targetLead.company_name : (targetPhone || 'Lead');
+  await addAutomationLog('system', `🗑️ Lead "${companyName}" (${formatPhoneDisplay(targetPhone)}) excluído do banco de dados e adicionado à lista de bloqueio (envios interrompidos).`);
 
   return true;
 }
@@ -621,7 +702,7 @@ export function calculateNextDispatchSchedule(
   const currentDay = now.getDay(); // 0 = Domingo, 6 = Sábado
 
   const typing = getCurrentlyTyping();
-  const pendingLeads = leads.filter(l => l.status === 'pending');
+  const pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
   const nextLead = pendingLeads[0] || null;
 
   // Se está digitando ativamente no momento
@@ -892,7 +973,7 @@ async function executeAutomationCycleInternal(options: {
   }
 
   let leads = await getAutomationLeads();
-  let pendingLeads = leads.filter(l => l.status === 'pending');
+  let pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
   let searchedCount = 0;
 
   // 4. Se a fila estiver totalmente vazia e NÃO for solicitado pular busca, dispara a busca automática via Google API
@@ -921,7 +1002,7 @@ async function executeAutomationCycleInternal(options: {
       for (const scraped of validLeads) {
         if (!scraped.whatsapp) continue;
         const norm = toDialablePhone(scraped.whatsapp);
-        if (existingPhones.has(norm)) continue;
+        if (existingPhones.has(norm) || isBlacklistedPhone(norm) || isBlacklistedPhone(scraped.whatsapp) || isWhatsAppGroup(norm) || isWhatsAppGroup(scraped.whatsapp)) continue;
 
         const newLead: AutomationLead = {
           id: randomUUID(),
@@ -950,7 +1031,7 @@ async function executeAutomationCycleInternal(options: {
         await addAutomationLog('search', `✅ ${searchedCount} novos leads qualificados e enfileirados para ${chosenSegment} (${chosenCity}).`);
         // Recarrega lista atualizada
         leads = await getAutomationLeads();
-        pendingLeads = leads.filter(l => l.status === 'pending');
+        pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
       } else {
         await addAutomationLog('system', `Nenhum novo lead inédito encontrado para ${chosenSegment} em ${chosenCity}. Tentará outro nicho no próximo ciclo.`);
       }
@@ -976,10 +1057,10 @@ async function executeAutomationCycleInternal(options: {
     ? (pendingLeads.find(l => l.id === targetLeadId) || pendingLeads[0])
     : pendingLeads[0];
 
-  if (!nextLead || nextLead.status !== 'pending' || nextLead.dispatched_at) {
+  if (!nextLead || nextLead.status !== 'pending' || nextLead.dispatched_at || isBlacklistedPhone(nextLead.phone)) {
     return {
       executed: false,
-      message: 'Lead já foi disparado ou não está mais pendente.'
+      message: 'Lead já foi disparado, não está mais pendente ou foi excluído.'
     };
   }
 

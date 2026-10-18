@@ -48,6 +48,7 @@ export interface AutomationSettings {
   ai_model?: string;
   ai_prompt?: string;
   profile?: 'gustavo' | 'sergio' | 'custom';
+  excluded_phones?: string[];
 }
 
 export interface AutomationLead {
