@@ -10,8 +10,8 @@ import {
   InterestLevel
 } from '@/types';
 import { scrapeSerpAPI } from './outscraper';
-import { filterLeadsWithWhatsApp, toDialablePhone, isSamePhone, cleanPhoneDigits } from './phone';
-import { sendWhatsAppMessage, getWhatsAppQueue } from './whatsapp';
+import { filterLeadsWithWhatsApp, toDialablePhone, isSamePhone, cleanPhoneDigits, formatPhoneDisplay } from './phone';
+import { sendWhatsAppMessage, getWhatsAppQueue, clearWhatsAppQueue } from './whatsapp';
 import { interpolateVariables } from './templateInterpolation';
 
 export interface AutomationProfilePreset {
@@ -462,6 +462,75 @@ export async function updateAutomationLead(
     }
   }
   return true;
+}
+
+/**
+ * Exclui um lead do pipeline, seu histórico de mensagens e limpa a fila do WhatsApp
+ */
+export async function deleteAutomationLead(options: { id?: string; phone?: string }): Promise<boolean> {
+  const { id, phone } = options;
+  if (!id && !phone) return false;
+
+  // Localiza o lead na memória
+  const targetLead = inMemoryLeads.find(l => (id && l.id === id) || (phone && (l.phone === phone || isSamePhone(l.phone, phone))));
+  const targetPhone = targetLead ? targetLead.phone : (phone || '');
+  const targetId = targetLead ? targetLead.id : id;
+
+  // 1. Remove da memória local
+  inMemoryLeads = inMemoryLeads.filter(l => {
+    if (targetId && l.id === targetId) return false;
+    if (targetPhone && isSamePhone(l.phone, targetPhone)) return false;
+    return true;
+  });
+
+  if (targetPhone) {
+    inMemoryMessages = inMemoryMessages.filter(m => !isSamePhone(m.lead_phone, targetPhone));
+    // Limpa fila do WhatsApp microservice se houver mensagem pendente
+    await clearWhatsAppQueue(targetPhone).catch(() => false);
+  }
+
+  // 2. Remove do Supabase
+  if (supabase) {
+    try {
+      if (targetId) {
+        await supabase.from('automation_leads').delete().eq('id', targetId);
+      }
+      if (targetPhone) {
+        const digits = cleanPhoneDigits(targetPhone);
+        const normalized = toDialablePhone(targetPhone);
+        await supabase.from('automation_leads').delete().or(`phone.eq.${targetPhone},phone.eq.${normalized},phone.eq.+${digits},phone.eq.${digits}`);
+        await supabase.from('automation_messages').delete().or(`lead_phone.eq.${targetPhone},lead_phone.eq.${normalized},lead_phone.eq.+${digits},lead_phone.eq.${digits}`);
+      }
+    } catch (e) {
+      console.warn('[Automation] Erro ao excluir lead no Supabase:', e);
+    }
+  }
+
+  if (targetLead) {
+    await addAutomationLog('system', `🗑️ Lead "${targetLead.company_name}" (${formatPhoneDisplay(targetLead.phone)}) foi excluído.`);
+  }
+
+  return true;
+}
+
+/**
+ * Exclui todos os leads desqualificados de uma só vez
+ */
+export async function deleteDisqualifiedLeads(): Promise<number> {
+  const leads = await getAutomationLeads();
+  const disqualified = leads.filter(l => l.status === 'disqualified' || l.interest_level === 'none');
+  let deletedCount = 0;
+
+  for (const lead of disqualified) {
+    const ok = await deleteAutomationLead({ id: lead.id, phone: lead.phone });
+    if (ok) deletedCount++;
+  }
+
+  if (deletedCount > 0) {
+    await addAutomationLog('system', `🗑️ Limpeza em lote: ${deletedCount} leads desqualificados foram excluídos.`);
+  }
+
+  return deletedCount;
 }
 
 /**

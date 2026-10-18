@@ -450,6 +450,54 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
     }
   };
 
+  // Excluir lead individual
+  const handleDeleteLead = async (lead: AutomationLead) => {
+    if (!confirm(`Deseja realmente excluir o lead "${lead.company_name}" (${formatPhoneDisplay(lead.phone)}) e todo o histórico desta conversa?`)) {
+      return;
+    }
+    soundEngine.playMechanicalClick('secondary');
+    try {
+      const res = await fetch(`/api/automation/leads?id=${lead.id}&phone=${encodeURIComponent(lead.phone)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        soundEngine.playSentNotification();
+        setLeads(prev => prev.filter(l => l.id !== lead.id && l.phone !== lead.phone));
+        if (selectedLeadForChat?.id === lead.id || selectedLeadForChat?.phone === lead.phone) {
+          setSelectedLeadForChat(null);
+        }
+        setCycleFeedback(`🗑️ Lead "${lead.company_name}" excluído com sucesso.`);
+        await fetchStatus();
+      } else {
+        alert('Erro ao excluir lead.');
+      }
+    } catch {
+      alert('Erro de conexão ao excluir lead.');
+    }
+  };
+
+  // Excluir todos os leads desqualificados
+  const handleDeleteDisqualified = async () => {
+    const disqualifiedCount = leads.filter(l => l.status === 'disqualified' || l.interest_level === 'none').length;
+    if (disqualifiedCount === 0) return;
+    if (!confirm(`Deseja realmente excluir todos os ${disqualifiedCount} leads desqualificados do pipeline?`)) {
+      return;
+    }
+    soundEngine.playMechanicalClick('secondary');
+    try {
+      const res = await fetch('/api/automation/leads?disqualified=true', {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        soundEngine.playSentNotification();
+        setCycleFeedback(`🗑️ ${disqualifiedCount} leads desqualificados removidos.`);
+        await fetchStatus();
+      }
+    } catch {
+      alert('Erro ao excluir leads desqualificados.');
+    }
+  };
+
   // Importar leads disponíveis da busca para a automação
   const handleImportInitialLeads = async () => {
     if (!initialLeads || initialLeads.length === 0) return;
@@ -1596,6 +1644,18 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
                 </span>
               </button>
             ))}
+
+            {leads.some(l => l.status === 'disqualified' || l.interest_level === 'none') && (
+              <button
+                type="button"
+                onClick={handleDeleteDisqualified}
+                className="ml-auto px-2.5 py-1.5 bg-zinc-900 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-800/80 transition-colors cursor-pointer flex items-center gap-1 font-mono text-[11px]"
+                title="Excluir todos os leads desqualificados de uma vez"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Limpar Desqualificados ({leads.filter(l => l.status === 'disqualified' || l.interest_level === 'none').length})</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1792,6 +1852,15 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
                       >
                         <UserCheck className="w-3 h-3" />
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLead(lead)}
+                        className="p-1.5 bg-zinc-900 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-800/80 transition-colors cursor-pointer shrink-0"
+                        title="Excluir este lead e todo o histórico de mensagens"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 );
@@ -1877,6 +1946,15 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
                     }`}
                   >
                     {selectedLeadForChat.human_takeover ? 'Devolver para IA' : 'Assumir Conversa'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteLead(selectedLeadForChat)}
+                    className="px-2.5 py-1.5 bg-zinc-900 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 border border-zinc-700 hover:border-red-700 font-mono text-xs font-bold uppercase transition-colors cursor-pointer flex items-center gap-1.5"
+                    title="Excluir este lead e todo o histórico"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Excluir</span>
                   </button>
                   <button
                     onClick={() => setSelectedLeadForChat(null)}
