@@ -9,7 +9,7 @@ import { IndustrialLeadCard } from '@/components/IndustrialLeadCard';
 import { ExportPDF } from '@/components/ExportPDF';
 import { ExportIndustrialPDF } from '@/components/ExportIndustrialPDF';
 import { Lead, IndustrialLead } from '@/types';
-import { AlertTriangle, Layers, Coins, Building2, Globe, MessageSquare, CheckCircle2, LogOut } from 'lucide-react';
+import { AlertTriangle, Layers, Coins, Building2, Globe, MessageSquare, CheckCircle2, LogOut, Bot } from 'lucide-react';
 import { WhatsAppCampaignPanel } from '@/components/WhatsAppCampaignPanel';
 import { supabase } from '@/lib/supabase';
 import { getOperatorSession, signOutOperator } from '@/lib/auth';
@@ -333,7 +333,7 @@ export default function Home() {
             }`}
           >
             <MessageSquare className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 shrink-0" />
-            <span className="truncate">WhatsApp</span>
+            <span className="truncate">WhatsApp & Robô IA</span>
             {leadsWithWhatsApp.length > 0 && (
               <span className="bg-zinc-950 text-[#E5FF00] text-[10px] sm:text-xs font-mono font-black px-1.5 py-0.5 leading-none">
                 {leadsWithWhatsApp.length}

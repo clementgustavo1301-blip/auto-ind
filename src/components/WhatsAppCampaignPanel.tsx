@@ -40,12 +40,15 @@ import {
   Volume2,
   VolumeX,
   Film,
-  Play
+  Play,
+  Bot
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { WhatsAppLog } from '@/lib/supabase';
 import { soundEngine } from '@/lib/sound-effects';
 import { PromoVideoStudio } from '@/components/PromoVideoStudio';
+import { AutomationPanel } from '@/components/AutomationPanel';
+import { interpolateVariables, TEMPLATE_AVAILABLE_TAGS } from '@/lib/templateInterpolation';
 
 function OdometerCounter({ value }: { value: number }) {
   const digits = String(value).split('');
@@ -111,6 +114,9 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
 
   const [leadSearch, setLeadSearch] = useState('');
   const [mobileSection, setMobileSection] = useState<'queue' | 'compose' | 'preview'>('queue');
+  const [activeSubTab, setActiveSubTab] = useState<'campaign' | 'automation'>('campaign');
+  const [isEnqueuingAutomation, setIsEnqueuingAutomation] = useState(false);
+  const [automationEnqueueSuccess, setAutomationEnqueueSuccess] = useState<string | null>(null);
 
   // 2. Modelo de Mensagem e Variáveis (Gatilho da Curiosidade de Alta Resposta)
   const [messageTemplate, setMessageTemplate] = useState<string>(
@@ -131,6 +137,9 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     phone?: string;
     push_name?: string;
     jid?: string;
+    is_typing?: boolean;
+    typing_phone?: string;
+    inbound_count?: number;
   }>({
     connected: false,
     logged_in: false,
@@ -249,13 +258,16 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     const empresaNome = ('razaoSocial' in l && l.razaoSocial) ? l.razaoSocial : l.name;
     const primeiroNome = l.name.split(' ')[0] || l.name;
 
-    const finalMsg = messageTemplate
-      .replace(/{{nome}}/gi, primeiroNome)
-      .replace(/{{empresa}}/gi, empresaNome)
-      .replace(/{{cidade}}/gi, l.city || 'sua região')
-      .replace(/{{categoria}}/gi, l.category || 'seu setor')
-      .replace(/{{telefone}}/gi, phoneToSend)
-      .replace(/{{saudacao}}/gi, currentGreeting);
+    const finalMsg = interpolateVariables(messageTemplate, {
+      nome: primeiroNome,
+      primeiro_nome: primeiroNome,
+      empresa: empresaNome,
+      cidade: l.city,
+      categoria: l.category || ('mainActivity' in l ? (l as any).mainActivity : ''),
+      segmento: l.category || ('mainActivity' in l ? (l as any).mainActivity : ''),
+      telefone: phoneToSend,
+      saudacao: currentGreeting
+    });
 
     try {
       const res = await fetch('/api/whatsapp/send', {
@@ -737,13 +749,16 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
     const empresaNome = ('razaoSocial' in l && l.razaoSocial) ? l.razaoSocial : l.name;
     const primeiroNome = l.name.split(' ')[0] || l.name;
 
-    return messageTemplate
-      .replace(/{{nome}}/gi, primeiroNome)
-      .replace(/{{empresa}}/gi, empresaNome)
-      .replace(/{{cidade}}/gi, l.city || 'sua região')
-      .replace(/{{categoria}}/gi, l.category || 'seu setor')
-      .replace(/{{telefone}}/gi, activeLead.phone || '')
-      .replace(/{{saudacao}}/gi, currentGreeting);
+    return interpolateVariables(messageTemplate, {
+      nome: primeiroNome,
+      primeiro_nome: primeiroNome,
+      empresa: empresaNome,
+      cidade: l.city,
+      categoria: l.category || ('mainActivity' in l ? (l as any).mainActivity : ''),
+      segmento: l.category || ('mainActivity' in l ? (l as any).mainActivity : ''),
+      telefone: activeLead.phone || '',
+      saudacao: currentGreeting
+    });
   }, [messageTemplate, activeLead, currentGreeting]);
 
   // Estimativa de tempo de digitação humanizada baseada nas configurações ativas
@@ -1020,13 +1035,16 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
       const empresaNome = ('razaoSocial' in l && l.razaoSocial) ? l.razaoSocial : l.name;
       const primeiroNome = l.name.split(' ')[0] || l.name;
 
-      const finalMsg = messageTemplate
-        .replace(/{{nome}}/gi, primeiroNome)
-        .replace(/{{empresa}}/gi, empresaNome)
-        .replace(/{{cidade}}/gi, l.city || 'sua região')
-        .replace(/{{categoria}}/gi, l.category || 'seu setor')
-        .replace(/{{telefone}}/gi, item.phone || '')
-        .replace(/{{saudacao}}/gi, currentGreeting);
+      const finalMsg = interpolateVariables(messageTemplate, {
+        nome: primeiroNome,
+        primeiro_nome: primeiroNome,
+        empresa: empresaNome,
+        cidade: l.city,
+        categoria: l.category || ('mainActivity' in l ? (l as any).mainActivity : ''),
+        segmento: l.category || ('mainActivity' in l ? (l as any).mainActivity : ''),
+        telefone: item.phone || '',
+        saudacao: currentGreeting
+      });
 
       try {
         const res = await fetch('/api/whatsapp/send', {
@@ -1065,6 +1083,53 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
 
     setIsSending(false);
     fetchStatus();
+  };
+
+  // Envia leads selecionados diretamente para a fila da Automação (Robô IA SDR)
+  const handleEnqueueToAutomation = async () => {
+    const selected = leadItems.filter(it => it.selected);
+    if (selected.length === 0) {
+      alert('Selecione pelo menos um lead na tabela para enviar à fila da automação.');
+      return;
+    }
+
+    setIsEnqueuingAutomation(true);
+    setAutomationEnqueueSuccess(null);
+    soundEngine.playMechanicalClick('primary');
+
+    try {
+      const formatted = selected.map(it => {
+        const l = it.lead;
+        const companyName = ('razaoSocial' in l && l.razaoSocial) ? l.razaoSocial : l.name;
+        return {
+          company_name: companyName,
+          phone: it.phone,
+          city: l.city || 'São Paulo',
+          state: ('state' in l && (l as any).state) ? (l as any).state : 'SP',
+          segment: l.category || ('mainActivity' in l ? (l as any).mainActivity : '') || 'Indústria',
+          source: ('cnpj' in l && (l as any).cnpj) ? 'industries_selection' : 'local_selection'
+        };
+      });
+
+      const res = await fetch('/api/automation/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads: formatted })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        soundEngine.playSentNotification();
+        setAutomationEnqueueSuccess(`✅ ${data.added} leads adicionados à fila do Robô IA (${data.duplicates} duplicados ignorados)!`);
+      } else {
+        const err = await res.json();
+        alert('Erro ao enviar leads para automação: ' + (err.error || 'Erro desconhecido'));
+      }
+    } catch (err: any) {
+      alert('Erro de conexão ao enviar para automação: ' + err.message);
+    } finally {
+      setIsEnqueuingAutomation(false);
+    }
   };
 
   return (
@@ -1356,8 +1421,80 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
         </div>
       )}
 
-      {/* 1. Header do Painel de Disparo */}
-      <div className="bg-zinc-950 text-white p-4 sm:p-6 md:p-8 border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B] flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
+      {/* SELETOR DE SUB-ABAS: DISPARO DE CAMPANHA VS PILOTO AUTOMÁTICO IA */}
+      <div className="bg-zinc-950 border-4 border-zinc-950 p-2 sm:p-2.5 shadow-[6px_6px_0_0_#18181B] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <button
+            id="subtab-campaign"
+            type="button"
+            onClick={() => {
+              soundEngine.playMechanicalClick('primary');
+              setActiveSubTab('campaign');
+            }}
+            className={`flex-1 sm:flex-initial min-h-[46px] px-4 sm:px-6 py-2.5 font-black uppercase text-xs sm:text-sm tracking-wide flex items-center justify-center gap-2 border-2 border-zinc-950 transition-all cursor-pointer ${
+              activeSubTab === 'campaign'
+                ? 'bg-[#25D366] text-zinc-950 shadow-[3px_3px_0_0_#000]'
+                : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white'
+            }`}
+          >
+            <Send size={16} strokeWidth={2.75} />
+            <span>Disparo de Campanha</span>
+            <span className="bg-zinc-950 text-[#E5FF00] text-[10px] font-mono font-black px-1.5 py-0.5 ml-1">
+              {leadItems.length}
+            </span>
+          </button>
+
+          <button
+            id="subtab-automation"
+            type="button"
+            onClick={() => {
+              soundEngine.playMechanicalClick('primary');
+              setActiveSubTab('automation');
+            }}
+            className={`flex-1 sm:flex-initial min-h-[46px] px-4 sm:px-6 py-2.5 font-black uppercase text-xs sm:text-sm tracking-wide flex items-center justify-center gap-2 border-2 border-zinc-950 transition-all cursor-pointer ${
+              activeSubTab === 'automation'
+                ? 'bg-[#E5FF00] text-zinc-950 shadow-[3px_3px_0_0_#000]'
+                : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white'
+            }`}
+          >
+            <Bot size={16} strokeWidth={2.75} />
+            <span>Piloto Automático & IA SDR</span>
+            <span className="bg-zinc-950 text-[#25D366] text-[10px] font-mono font-black px-1.5 py-0.5 ml-1">
+              ROBÔ IA
+            </span>
+          </button>
+        </div>
+
+        <div className="hidden sm:flex items-center gap-2 text-[11px] font-mono text-zinc-400 pr-2">
+          <span className="text-zinc-500">Fluxo Selecionado:</span>
+          <span className="bg-zinc-900 border border-zinc-800 px-2 py-1 text-zinc-200 font-bold">
+            {activeSubTab === 'campaign' ? '⚡ 1. Campanha Direta & Fila' : '🤖 2. Robô IA Autônomo'}
+          </span>
+        </div>
+      </div>
+
+      {activeSubTab === 'automation' ? (
+        <AutomationPanel initialLeads={initialLeads} />
+      ) : (
+        <>
+          {/* BANNER DE DIGITAÇÃO EM TEMPO REAL */}
+          {(serviceStatus.is_typing || leadItems.some(it => it.status === 'typing')) && (
+            <div className="bg-emerald-500 text-zinc-950 p-3.5 border-4 border-zinc-950 shadow-[4px_4px_0_0_#000] flex flex-col sm:flex-row sm:items-center justify-between gap-2 animate-pulse">
+              <div className="flex items-center gap-3">
+                <span className="w-3.5 h-3.5 rounded-full bg-zinc-950 animate-ping shrink-0" />
+                <span className="font-mono font-black text-xs sm:text-sm uppercase tracking-wider">
+                  ✍️ DISPARADOR DIGITANDO MENSAGEM AGORA
+                  {serviceStatus.typing_phone ? ` PARA ${formatPhoneDisplay(serviceStatus.typing_phone)}` : ''}...
+                </span>
+              </div>
+              <span className="font-mono text-[11px] font-bold bg-zinc-950 text-[#E5FF00] px-2.5 py-1 border border-zinc-950 self-start sm:self-auto">
+                Simulação Humana Ativa
+              </span>
+            </div>
+          )}
+
+          {/* 1. Header do Painel de Disparo */}
+          <div className="bg-zinc-950 text-white p-4 sm:p-6 md:p-8 border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B] flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
         <div className="flex flex-col gap-1.5 sm:gap-2">
           <div className="flex items-center gap-2.5">
             <span className="w-3 h-3 sm:w-3.5 sm:h-3.5 bg-[#25D366] rounded-full inline-block animate-pulse" />
@@ -2470,26 +2607,61 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
               )}
             </div>
 
-            {/* Ação de Disparo em Massa com Efeito de Clique Tátil (translate(4px, 4px) + sombra zero) */}
+            {/* Ações da Lista: Disparo Imediato OU Enviar para a Fila do Robô IA */}
             <div className="pt-4 border-t-2 border-zinc-200 flex flex-col gap-3">
+              {/* Opção 1: Disparo Direto Sequencial */}
               <motion.button
                 type="button"
                 onClick={handleStartBatchDispatch}
                 disabled={isSending || selectedCount === 0 || serviceStatus.limit_reached}
                 whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
                 transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                className="btn-tactile-6 w-full min-h-[54px] py-3.5 sm:py-4 px-4 sm:px-6 bg-[#25D366] text-zinc-950 font-black uppercase tracking-wider text-sm sm:text-lg border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 sm:gap-3 text-center cursor-pointer"
+                className="btn-tactile-6 w-full min-h-[52px] py-3.5 px-4 sm:px-6 bg-[#25D366] text-zinc-950 font-black uppercase tracking-wider text-xs sm:text-base border-4 border-zinc-950 shadow-[5px_5px_0_0_#18181B] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 sm:gap-3 text-center cursor-pointer hover:bg-emerald-400"
               >
                 {isSending ? (
                   <>
-                    <RefreshCw className="animate-spin shrink-0" size={22} /> Enfileirando Mensagens...
+                    <RefreshCw className="animate-spin shrink-0" size={20} /> Enfileirando Mensagens...
                   </>
                 ) : (
                   <>
-                    <Send size={22} strokeWidth={3} className="shrink-0" /> Disparar para {selectedCount} Leads Selecionados
+                    <Send size={20} strokeWidth={3} className="shrink-0" /> Opção 1: Disparar para {selectedCount} Leads (Fila WhatsApp)
                   </>
                 )}
               </motion.button>
+
+              {/* Opção 2: Jogar Leads na Fila da Automação (Robô IA) */}
+              <motion.button
+                type="button"
+                onClick={handleEnqueueToAutomation}
+                disabled={isEnqueuingAutomation || selectedCount === 0}
+                whileTap={{ x: 4, y: 4, boxShadow: '0px 0px 0px 0px #18181B' }}
+                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                className="btn-tactile-6 w-full min-h-[52px] py-3.5 px-4 sm:px-6 bg-[#E5FF00] text-zinc-950 font-black uppercase tracking-wider text-xs sm:text-base border-4 border-zinc-950 shadow-[5px_5px_0_0_#18181B] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 sm:gap-3 text-center cursor-pointer hover:bg-yellow-300"
+              >
+                {isEnqueuingAutomation ? (
+                  <>
+                    <RefreshCw className="animate-spin shrink-0" size={20} /> Adicionando ao Robô...
+                  </>
+                ) : (
+                  <>
+                    <Bot size={20} strokeWidth={2.75} className="shrink-0" /> Opção 2: Jogar {selectedCount} Leads na Fila do Robô IA
+                  </>
+                )}
+              </motion.button>
+
+              {/* Feedback de Envio para a Automação */}
+              {automationEnqueueSuccess && (
+                <div className="p-3 bg-emerald-50 border-2 border-emerald-600 text-xs font-mono font-bold text-emerald-950 flex flex-col sm:flex-row items-center justify-between gap-2 shadow-[2px_2px_0_0_#065F46]">
+                  <span className="truncate">{automationEnqueueSuccess}</span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('automation')}
+                    className="px-3 py-1 bg-zinc-950 text-[#E5FF00] text-[11px] font-black uppercase hover:bg-zinc-800 transition-colors shrink-0"
+                  >
+                    Ver no Piloto Automático ➔
+                  </button>
+                </div>
+              )}
 
               {isSending && (
                 <div className="w-full bg-zinc-200 h-2 border border-zinc-950 overflow-hidden">
@@ -3048,6 +3220,8 @@ CREATE POLICY "Permitir anon" ON public.whatsapp_logs FOR ALL TO anon, authentic
             )}
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

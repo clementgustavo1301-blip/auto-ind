@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -100,6 +101,15 @@ type AntiBanConfig struct {
 	MaxTypingSec  int    `json:"max_typing_sec"`
 	SentToday     int    `json:"sent_today"`
 	LastResetDate string `json:"last_reset_date"`
+	WebhookURL    string `json:"webhook_url,omitempty"`
+}
+
+type InboundMessage struct {
+	ID        string    `json:"id"`
+	Phone     string    `json:"phone"`
+	Message   string    `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
+	PushName  string    `json:"push_name,omitempty"`
 }
 
 type QueueItem struct {
@@ -107,6 +117,7 @@ type QueueItem struct {
 	Phone     string     `json:"phone"`
 	Message   string     `json:"message"`
 	MediaURL  string     `json:"media_url,omitempty"`
+	IsReply   bool       `json:"is_reply,omitempty"`
 	Status    string     `json:"status"` // queued, typing, sent, failed, limit_reached
 	CreatedAt time.Time  `json:"created_at"`
 	SentAt    *time.Time `json:"sent_at,omitempty"`
@@ -117,6 +128,7 @@ type SendRequest struct {
 	Phone    string `json:"phone"`
 	Message  string `json:"message"`
 	MediaURL string `json:"media_url,omitempty"`
+	IsReply  bool   `json:"is_reply,omitempty"`
 }
 
 type SendResponse struct {
@@ -138,6 +150,9 @@ type StatusResponse struct {
 	LimitReached  bool   `json:"limit_reached"`
 	QueueLength   int    `json:"queue_length"`
 	LastResetDate string `json:"last_reset_date"`
+	IsTyping      bool   `json:"is_typing"`
+	TypingPhone   string `json:"typing_phone,omitempty"`
+	InboundCount  int    `json:"inbound_count"`
 }
 
 // ============================================================================
@@ -145,19 +160,25 @@ type StatusResponse struct {
 // ============================================================================
 
 type ServiceManager struct {
-	client       *whatsmeow.Client
-	container    *sqlstore.Container
-	ctx          context.Context
-	pairMu       sync.Mutex
-	pairing      bool
-	config       AntiBanConfig
-	cfgMu        sync.RWMutex
-	queue        []*QueueItem
-	queueMu      sync.RWMutex
-	notifyCh     chan struct{}
-	qrCodeRaw    string
-	qrCodeBase64 string
-	qrMu         sync.RWMutex
+	client          *whatsmeow.Client
+	container       *sqlstore.Container
+	ctx             context.Context
+	pairMu          sync.Mutex
+	pairing         bool
+	config          AntiBanConfig
+	cfgMu           sync.RWMutex
+	queue           []*QueueItem
+	queueMu         sync.RWMutex
+	inboundMessages []InboundMessage
+	inboundMu       sync.RWMutex
+	lidToPhone      map[string]string
+	lidMu           sync.RWMutex
+	notifyCh        chan struct{}
+	qrCodeRaw       string
+	qrCodeBase64    string
+	qrMu            sync.RWMutex
+	seenInboundIDs  map[string]time.Time
+	seenInboundMu   sync.Mutex
 }
 
 var appManager *ServiceManager
@@ -331,6 +352,60 @@ func toggleNinthDigit(phone string) string {
 	return ""
 }
 
+func (s *ServiceManager) rememberPhoneForJID(jid types.JID, phone string) {
+	if jid.User == "" || phone == "" {
+		return
+	}
+	s.lidMu.Lock()
+	if s.lidToPhone == nil {
+		s.lidToPhone = make(map[string]string)
+	}
+	s.lidToPhone[jid.User] = phone
+	s.lidMu.Unlock()
+}
+
+func (s *ServiceManager) resolveSenderPhone(evt *events.Message) string {
+	// 1. Se Sender já é @s.whatsapp.net
+	if evt.Info.Sender.Server == types.DefaultUserServer && evt.Info.Sender.User != "" {
+		return evt.Info.Sender.User
+	}
+	// 2. Se SenderAlt traz o número @s.whatsapp.net (padrão WhatsApp Multi-Device quando Sender é @lid)
+	if evt.Info.SenderAlt.Server == types.DefaultUserServer && evt.Info.SenderAlt.User != "" {
+		s.rememberPhoneForJID(evt.Info.Sender, evt.Info.SenderAlt.User)
+		return evt.Info.SenderAlt.User
+	}
+	// 3. Se Chat traz o número @s.whatsapp.net
+	if evt.Info.Chat.Server == types.DefaultUserServer && evt.Info.Chat.User != "" {
+		s.rememberPhoneForJID(evt.Info.Sender, evt.Info.Chat.User)
+		return evt.Info.Chat.User
+	}
+	// 4. Consulta cache em memória (mapeado durante resolveRecipientJID)
+	s.lidMu.RLock()
+	if mapped, ok := s.lidToPhone[evt.Info.Sender.User]; ok && mapped != "" {
+		s.lidMu.RUnlock()
+		return mapped
+	}
+	if mapped, ok := s.lidToPhone[evt.Info.Chat.User]; ok && mapped != "" {
+		s.lidMu.RUnlock()
+		return mapped
+	}
+	s.lidMu.RUnlock()
+
+	// 5. Consulta Store de LIDs do Whatsmeow
+	if s.client != nil && s.client.Store != nil {
+		if alt, err := s.client.Store.GetAltJID(s.ctx, evt.Info.Sender); err == nil && alt.Server == types.DefaultUserServer && alt.User != "" {
+			s.rememberPhoneForJID(evt.Info.Sender, alt.User)
+			return alt.User
+		}
+		if alt, err := s.client.Store.GetAltJID(s.ctx, evt.Info.Chat); err == nil && alt.Server == types.DefaultUserServer && alt.User != "" {
+			s.rememberPhoneForJID(evt.Info.Chat, alt.User)
+			return alt.User
+		}
+	}
+
+	return evt.Info.Sender.User
+}
+
 // Resolve destinatário garantindo SEMPRE @s.whatsapp.net e nunca @lid
 func (s *ServiceManager) resolveRecipientJID(ctx context.Context, rawPhone string) (types.JID, error) {
 	candidates := phoneCandidates(rawPhone)
@@ -365,10 +440,14 @@ func (s *ServiceManager) resolveRecipientJID(ctx context.Context, rawPhone strin
 		return types.EmptyJID, fmt.Errorf("o número %s não está registrado no WhatsApp (testados: +%s)", rawPhone, strings.Join(candidates, ", +"))
 	}
 
+	// Salva mapeamento reverso LID -> Telefone para identificar respostas recebidas de @lid
+	s.rememberPhoneForJID(item.JID, cleanPhone)
+
 	// 🛡️ REGRA CRÍTICA ANTI-LID:
 	// Se a resposta trouxer um JID com server @lid, NUNCA enviar para ele!
 	// Sempre usar a JID com @s.whatsapp.net
 	if !item.PhoneNumber.IsEmpty() && item.PhoneNumber.Server == types.DefaultUserServer {
+		s.rememberPhoneForJID(item.JID, item.PhoneNumber.User)
 		log.Printf("🎯 [JID Resolver] Resolvido via item.PhoneNumber: %s (Original JID: %s)", item.PhoneNumber, item.JID)
 		return item.PhoneNumber, nil
 	}
@@ -582,6 +661,13 @@ func (s *ServiceManager) getNextPendingItem() *QueueItem {
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
 
+	// Prioriza respostas de conversação (IA SDR / Humano) sobre disparos frios da fila
+	for _, item := range s.queue {
+		if item.Status == "queued" && item.IsReply {
+			return item
+		}
+	}
+
 	for _, item := range s.queue {
 		if item.Status == "queued" {
 			return item
@@ -597,8 +683,8 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 	cfg := s.config
 	s.cfgMu.RUnlock()
 
-	// 1. Verificação de Limite Diário
-	if cfg.SentToday >= cfg.DailyLimit {
+	// 1. Verificação de Limite Diário (apenas para disparos de prospecção fria; respostas da IA não são bloqueadas)
+	if !item.IsReply && cfg.SentToday >= cfg.DailyLimit {
 		log.Printf("🛑 [Limite Atingido] %d/%d disparos hoje. Mensagem %s marcada como limit_reached.",
 			cfg.SentToday, cfg.DailyLimit, item.ID)
 		s.queueMu.Lock()
@@ -637,7 +723,14 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 	item.Status = "typing"
 	s.queueMu.Unlock()
 
-	s.simulateHumanTyping(ctx, targetJID, item.Message, cfg)
+	typingCfg := cfg
+	if item.IsReply {
+		// Respostas de conversa têm digitação mais ágil (4s a 10s)
+		typingCfg.MinTypingSec = 4
+		typingCfg.MaxTypingSec = 10
+		typingCfg.TypingSpeedMs = 90
+	}
+	s.simulateHumanTyping(ctx, targetJID, item.Message, typingCfg)
 
 	// 5. Montagem do Payload (Texto ou Mídia)
 	var waMsg *waE2E.Message
@@ -673,10 +766,12 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 	item.SentAt = &now
 	s.queueMu.Unlock()
 
-	// 7. Incrementa contador e persiste
+	// 7. Incrementa contador apenas para disparos de prospecção (não para respostas da IA)
 	s.cfgMu.Lock()
-	s.config.SentToday++
-	saveConfig(s.config)
+	if !item.IsReply {
+		s.config.SentToday++
+		saveConfig(s.config)
+	}
 	currentSent := s.config.SentToday
 	dailyLimit := s.config.DailyLimit
 	s.cfgMu.Unlock()
@@ -685,7 +780,11 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 		item.ID, sendResp.ID, currentSent, dailyLimit)
 
 	// 8. Intervalo de Espaçamento de Segurança entre Mensagens (Cool-down Anti-Ban)
-	s.applyCooldown(cfg)
+	if item.IsReply {
+		time.Sleep(time.Duration(4+rand.Intn(5)) * time.Second)
+	} else {
+		s.applyCooldown(cfg)
+	}
 }
 
 func (s *ServiceManager) applyCooldown(cfg AntiBanConfig) {
@@ -715,12 +814,22 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	appManager.queueMu.RLock()
 	pendingCount := 0
+	var isTyping bool
+	var typingPhone string
 	for _, it := range appManager.queue {
 		if it.Status == "queued" || it.Status == "typing" {
 			pendingCount++
 		}
+		if it.Status == "typing" {
+			isTyping = true
+			typingPhone = it.Phone
+		}
 	}
 	appManager.queueMu.RUnlock()
+
+	appManager.inboundMu.RLock()
+	inboundCount := len(appManager.inboundMessages)
+	appManager.inboundMu.RUnlock()
 
 	appManager.qrMu.RLock()
 	hasQR := appManager.qrCodeBase64 != ""
@@ -745,6 +854,9 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		LimitReached:  cfg.SentToday >= cfg.DailyLimit,
 		QueueLength:   pendingCount,
 		LastResetDate: cfg.LastResetDate,
+		IsTyping:      isTyping,
+		TypingPhone:   typingPhone,
+		InboundCount:  inboundCount,
 	}
 
 	_ = json.NewEncoder(w).Encode(resp)
@@ -884,11 +996,79 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 		Phone:     req.Phone,
 		Message:   req.Message,
 		MediaURL:  req.MediaURL,
+		IsReply:   req.IsReply,
 		Status:    "queued",
 		CreatedAt: time.Now(),
 	}
 
 	appManager.queueMu.Lock()
+	// 🛡️ Proteção Anti-Spam: Não permite enfileirar disparos repetidos se já houver mensagem pendente ou digitando para este número
+	for _, it := range appManager.queue {
+		da := digitsOnly(it.Phone)
+		db := digitsOnly(req.Phone)
+		isSame := (da != "" && db != "") && (da == db || (len(da) >= 8 && len(db) >= 8 && da[len(da)-8:] == db[len(db)-8:]))
+
+		// 1. Já existe mensagem na fila aguardando ou digitando para este mesmo número? Bloqueia SEMPRE!
+		if isSame && (it.Status == "queued" || it.Status == "typing") {
+			appManager.queueMu.Unlock()
+			log.Printf("⚠️ [Anti-Spam] Disparo para %s evitado: já existe mensagem pendente ou digitando na fila.", req.Phone)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(SendResponse{
+				Success:       false,
+				Queued:        false,
+				QueueID:       it.ID,
+				QueuePosition: 1,
+				Message:       "Mensagem evitada: já existe envio pendente para este contato.",
+			})
+			return
+		}
+
+		// 2. Se for uma nova prospecção fria (!req.IsReply) e já enviamos mensagem hoje para este contato, bloqueia
+		if isSame && !req.IsReply && it.Status == "sent" {
+			appManager.queueMu.Unlock()
+			log.Printf("⚠️ [Anti-Spam] Prospecção para %s evitada: contato já recebeu mensagem hoje.", req.Phone)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(SendResponse{
+				Success:       false,
+				Queued:        false,
+				QueueID:       it.ID,
+				QueuePosition: 0,
+				Message:       "Contato já recebeu mensagem da campanha hoje.",
+			})
+			return
+		}
+
+		// 3. Se for resposta da IA (req.IsReply), apenas impede disparos duplos em rajada imediata (< 5 segundos)
+		if isSame && req.IsReply && it.Status == "sent" && it.SentAt != nil && time.Since(*it.SentAt) < 5*time.Second {
+			appManager.queueMu.Unlock()
+			log.Printf("⚠️ [Anti-Spam] Resposta em rajada para %s evitada: enviada há menos de 5s.", req.Phone)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(SendResponse{
+				Success:       false,
+				Queued:        false,
+				QueueID:       it.ID,
+				QueuePosition: 0,
+				Message:       "Aguarde o intervalo de 5s entre respostas para o mesmo contato.",
+			})
+			return
+		}
+
+		// 4. Se for mensagem idêntica enviada nos últimos 15 minutos, bloqueia SEMPRE
+		if isSame && it.Status == "sent" && it.SentAt != nil && time.Since(*it.SentAt) < 15*time.Minute && it.Message == req.Message {
+			appManager.queueMu.Unlock()
+			log.Printf("⚠️ [Anti-Spam] Disparo idêntico para %s evitado: já enviado nos últimos 15 min.", req.Phone)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(SendResponse{
+				Success:       false,
+				Queued:        false,
+				QueueID:       it.ID,
+				QueuePosition: 0,
+				Message:       "Mensagem idêntica já enviada recentemente.",
+			})
+			return
+		}
+	}
+
 	appManager.queue = append(appManager.queue, newItem)
 
 	// Calcular posição na fila
@@ -923,6 +1103,47 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 
 func handleQueue(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == http.MethodDelete {
+		targetPhone := strings.TrimSpace(r.URL.Query().Get("phone"))
+		appManager.queueMu.Lock()
+		defer appManager.queueMu.Unlock()
+
+		cancelledCount := 0
+		if targetPhone != "" {
+			targetDigits := digitsOnly(targetPhone)
+			filtered := make([]*QueueItem, 0, len(appManager.queue))
+			for _, it := range appManager.queue {
+				itDigits := digitsOnly(it.Phone)
+				isSame := (itDigits != "" && targetDigits != "") &&
+					(itDigits == targetDigits || (len(itDigits) >= 8 && len(targetDigits) >= 8 && itDigits[len(itDigits)-8:] == targetDigits[len(targetDigits)-8:]))
+				if isSame && (it.Status == "queued" || it.Status == "typing") {
+					it.Status = "failed"
+					it.Error = "Cancelado manualmente / limpeza de fila"
+					cancelledCount++
+					continue
+				}
+				filtered = append(filtered, it)
+			}
+			appManager.queue = filtered
+		} else {
+			for _, it := range appManager.queue {
+				if it.Status == "queued" || it.Status == "typing" {
+					it.Status = "failed"
+					it.Error = "Fila limpa pelo usuário"
+					cancelledCount++
+				}
+			}
+			appManager.queue = make([]*QueueItem, 0)
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success":   true,
+			"cancelled": cancelledCount,
+			"message":   fmt.Sprintf("%d mensagens removidas da fila.", cancelledCount),
+		})
+		return
+	}
 
 	appManager.queueMu.RLock()
 	defer appManager.queueMu.RUnlock()
@@ -1059,6 +1280,9 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		if v, ok := updates["sent_today"].(float64); ok && v >= 0 {
 			appManager.config.SentToday = int(v)
 		}
+		if v, ok := updates["webhook_url"].(string); ok {
+			appManager.config.WebhookURL = strings.TrimSpace(v)
+		}
 		saveConfig(appManager.config)
 		cfg := appManager.config
 		appManager.cfgMu.Unlock()
@@ -1069,6 +1293,36 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+func handleInbound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodDelete {
+		targetID := strings.TrimSpace(r.URL.Query().Get("id"))
+		appManager.inboundMu.Lock()
+		if targetID != "" {
+			filtered := make([]InboundMessage, 0, len(appManager.inboundMessages))
+			for _, m := range appManager.inboundMessages {
+				if m.ID != targetID {
+					filtered = append(filtered, m)
+				}
+			}
+			appManager.inboundMessages = filtered
+		} else {
+			appManager.inboundMessages = make([]InboundMessage, 0)
+		}
+		appManager.inboundMu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "message": "Mensagens inbound atualizadas."})
+		return
+	}
+
+	appManager.inboundMu.RLock()
+	defer appManager.inboundMu.RUnlock()
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"total":    len(appManager.inboundMessages),
+		"messages": appManager.inboundMessages,
+	})
 }
 
 func handleDisconnect(w http.ResponseWriter, r *http.Request) {
@@ -1121,6 +1375,107 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 		s.clearQR()
 	case *events.PairError:
 		log.Printf("❌ [WhatsApp] Erro no pareamento: %v", evt.Error)
+	case *events.Message:
+		if evt.Info.IsFromMe || evt.Info.IsGroup || evt.Info.Chat.Server == "g.us" || evt.Info.Chat.Server == "broadcast" {
+			return
+		}
+
+		var text string
+		if msg := evt.Message; msg != nil {
+			if msg.Conversation != nil {
+				text = *msg.Conversation
+			} else if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil {
+				text = *msg.ExtendedTextMessage.Text
+			} else if msg.ImageMessage != nil && msg.ImageMessage.Caption != nil {
+				text = *msg.ImageMessage.Caption
+			} else if msg.DocumentMessage != nil && msg.DocumentMessage.Caption != nil {
+				text = *msg.DocumentMessage.Caption
+			}
+		}
+
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return
+		}
+
+		senderPhone := s.resolveSenderPhone(evt)
+		msgID := evt.Info.ID
+		if msgID != "" {
+			s.seenInboundMu.Lock()
+			if s.seenInboundIDs == nil {
+				s.seenInboundIDs = make(map[string]time.Time)
+			}
+			if last, ok := s.seenInboundIDs[msgID]; ok && time.Since(last) < 24*time.Hour {
+				s.seenInboundMu.Unlock()
+				log.Printf("🛡️ [Inbound Dedup] Mensagem %s de %s já processada anteriormente. Descartando duplicata.", msgID, senderPhone)
+				return
+			}
+			s.seenInboundIDs[msgID] = time.Now()
+			if len(s.seenInboundIDs) > 2000 {
+				for k, v := range s.seenInboundIDs {
+					if time.Since(v) > 24*time.Hour {
+						delete(s.seenInboundIDs, k)
+					}
+				}
+			}
+			s.seenInboundMu.Unlock()
+		} else {
+			msgID = fmt.Sprintf("inb_%d", time.Now().UnixNano())
+		}
+
+		log.Printf("📩 [WhatsApp Inbound] Mensagem recebida de %s (ID: %s, Sender: %s, Chat: %s): %s",
+			senderPhone, msgID, evt.Info.Sender, evt.Info.Chat, text)
+
+		// Armazena no buffer em memória para polling seguro pelo Next.js
+		s.inboundMu.Lock()
+		s.inboundMessages = append(s.inboundMessages, InboundMessage{
+			ID:        msgID,
+			Phone:     senderPhone,
+			Message:   text,
+			Timestamp: time.Now(),
+			PushName:  evt.Info.PushName,
+		})
+		if len(s.inboundMessages) > 200 {
+			s.inboundMessages = s.inboundMessages[len(s.inboundMessages)-200:]
+		}
+		s.inboundMu.Unlock()
+
+		s.cfgMu.RLock()
+		webhookURL := s.config.WebhookURL
+		s.cfgMu.RUnlock()
+		if webhookURL == "" {
+			webhookURL = os.Getenv("WEBHOOK_URL")
+		}
+		if webhookURL == "" {
+			webhookURL = "http://localhost:3000/api/whatsapp/webhook"
+		}
+
+		go func(phone, msgText, url string) {
+			payload, err := json.Marshal(map[string]string{
+				"phone":   phone,
+				"message": msgText,
+			})
+			if err != nil {
+				return
+			}
+
+			req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
+			if err != nil {
+				log.Printf("⚠️ Erro ao criar requisição de webhook: %v", err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			client := &http.Client{Timeout: 8 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("⚠️ Falha ao notificar webhook em %s: %v", url, err)
+				return
+			}
+			defer resp.Body.Close()
+
+			log.Printf("📨 [Webhook] Mensagem de %s entregue ao webhook (Status: %d)", phone, resp.StatusCode)
+		}(senderPhone, text, webhookURL)
 	}
 }
 
@@ -1234,9 +1589,10 @@ func main() {
 	cfg := loadConfig()
 
 	appManager = &ServiceManager{
-		config:   cfg,
-		queue:    make([]*QueueItem, 0),
-		notifyCh: make(chan struct{}, 100),
+		config:          cfg,
+		queue:           make([]*QueueItem, 0),
+		inboundMessages: make([]InboundMessage, 0),
+		notifyCh:        make(chan struct{}, 100),
 	}
 
 	// 1. Armazenamento 100% em Memória RAM (Zero arquivos de banco de dados em disco)
@@ -1277,6 +1633,7 @@ func main() {
 	mux.HandleFunc("/api/qr", handleQR)
 	mux.HandleFunc("/api/send", handleSend)
 	mux.HandleFunc("/api/queue", handleQueue)
+	mux.HandleFunc("/api/inbound", handleInbound)
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/disconnect", handleDisconnect)
 	mux.HandleFunc("/api/check", handleCheck)

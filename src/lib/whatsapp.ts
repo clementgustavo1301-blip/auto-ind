@@ -18,6 +18,15 @@ export interface WhatsAppSendOptions {
   phone: string;
   message: string;
   media_url?: string;
+  is_reply?: boolean;
+}
+
+export interface WhatsAppInboundMessage {
+  id: string;
+  phone: string;
+  message: string;
+  timestamp: string;
+  push_name?: string;
 }
 
 export interface WhatsAppSendResponse {
@@ -39,6 +48,9 @@ export interface WhatsAppStatusResponse {
   limit_reached: boolean;
   queue_length: number;
   last_reset_date: string;
+  is_typing?: boolean;
+  typing_phone?: string;
+  inbound_count?: number;
 }
 
 export interface WhatsAppQueueItem {
@@ -63,12 +75,61 @@ export interface WhatsAppAntiBanConfig {
   last_reset_date: string;
 }
 
+// Global memory lock to prevent repeated duplicate blasts to the same phone
+const globalPhoneLocks: Map<string, number> = ((global as any).__waPhoneLocks =
+  (global as any).__waPhoneLocks || new Map<string, number>());
+
+/**
+ * Limpa mensagens na fila do microserviço Go (opcionalmente filtrado por telefone)
+ */
+export async function clearWhatsAppQueue(phone?: string): Promise<boolean> {
+  try {
+    const url = phone
+      ? `${getServiceUrl()}/api/queue?phone=${encodeURIComponent(phone)}`
+      : `${getServiceUrl()}/api/queue`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Enfileira uma mensagem para disparo sequencial humanizado
  */
 export async function sendWhatsAppMessage(
   params: WhatsAppSendOptions
 ): Promise<WhatsAppSendResponse> {
+  const digits = (params.phone || '').replace(/\D/g, '');
+  if (!digits) {
+    return {
+      success: false,
+      queued: false,
+      queue_id: '',
+      queue_position: -1,
+      message: 'Telefone inválido para envio.',
+    };
+  }
+
+  // Trava anti-flood: para prospecção fria, exige 60s; para respostas da IA, exige 8s
+  const minIntervalMs = params.is_reply ? 8000 : 60000;
+  const lastSent = globalPhoneLocks.get(digits) || 0;
+  const timeSinceLast = Date.now() - lastSent;
+  if (timeSinceLast < minIntervalMs) {
+    console.warn(`[WhatsApp Anti-Flood] Disparo ignorado para ${params.phone}: enviado há ${Math.round(timeSinceLast / 1000)}s.`);
+    return {
+      success: false,
+      queued: false,
+      queue_id: '',
+      queue_position: -1,
+      message: `Bloqueio anti-flood: aguarde ${Math.round((minIntervalMs - timeSinceLast) / 1000)}s para novo envio.`,
+    };
+  }
+
   try {
     const res = await fetch(`${getServiceUrl()}/api/send`, {
       method: 'POST',
@@ -79,6 +140,7 @@ export async function sendWhatsAppMessage(
         phone: params.phone,
         message: params.message,
         media_url: params.media_url,
+        is_reply: params.is_reply,
       }),
       cache: 'no-store',
       signal: AbortSignal.timeout(10000),
@@ -97,6 +159,9 @@ export async function sendWhatsAppMessage(
     }
 
     const data: WhatsAppSendResponse = await res.json();
+    if (data.success || data.queued) {
+      globalPhoneLocks.set(digits, Date.now());
+    }
     return data;
   } catch (error: any) {
     console.error('Erro ao chamar o microserviço WhatsApp:', error);
@@ -313,5 +378,44 @@ export async function checkWhatsAppNumbers(
     return null;
   }
 }
+
+/**
+ * Consulta as mensagens recebidas (inbound) armazenadas no microserviço Go (para polling via Cloudflare Tunnel)
+ */
+export async function getWhatsAppInbound(): Promise<WhatsAppInboundMessage[]> {
+  try {
+    const res = await fetch(`${getServiceUrl()}/api/inbound`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!res.ok) return [];
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data.messages || []);
+    return list as WhatsAppInboundMessage[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Limpa mensagens recebidas já processadas do buffer do microserviço Go
+ */
+export async function clearWhatsAppInbound(id?: string): Promise<boolean> {
+  try {
+    const url = id
+      ? `${getServiceUrl()}/api/inbound?id=${encodeURIComponent(id)}`
+      : `${getServiceUrl()}/api/inbound`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 
 

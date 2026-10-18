@@ -6,6 +6,78 @@ import { checkWhatsAppNumbers } from './whatsapp';
  * distinguish "+51 987..." (Peru) from "51 987..." (Porto Alegre, BR).
  * Country detection (+55 for bare Brazilian numbers) happens in whatsapp-service.
  */
+export function cleanPhoneDigits(raw: string): string {
+  return (raw || '').replace(/\D/g, '');
+}
+
+/**
+ * Normaliza um número para formato E.164 brasileiro (+55DDDXXXXXXXXX)
+ */
+export function normalizeBrazilianPhone(raw: string): string {
+  const digits = cleanPhoneDigits(raw);
+  if (!digits) return '';
+
+  let national = digits;
+  if (national.startsWith('55') && national.length >= 12) {
+    national = national.slice(2);
+  }
+
+  // Se tiver DDD (10 ou 11 dígitos)
+  if (national.length === 10 || national.length === 11) {
+    const ddd = national.slice(0, 2);
+    let subscriber = national.slice(2);
+    // Adiciona o nono dígito se for celular de 8 dígitos
+    if (subscriber.length === 8 && ['6', '7', '8', '9'].includes(subscriber[0])) {
+      subscriber = '9' + subscriber;
+    }
+    return `+55${ddd}${subscriber}`;
+  }
+
+  return raw.startsWith('+') ? `+${digits}` : `+55${digits}`;
+}
+
+/**
+ * Compara dois números de telefone considerando variações de DDI (+55), 
+ * prefixos e a presença/ausência do nono dígito em celulares brasileiros.
+ */
+export function isSamePhone(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false;
+  const da = cleanPhoneDigits(a);
+  const db = cleanPhoneDigits(b);
+  if (!da || !db) return false;
+  if (da === db) return true;
+
+  // Remove DDI 55 se presente
+  const coreA = da.startsWith('55') && da.length >= 12 ? da.slice(2) : da;
+  const coreB = db.startsWith('55') && db.length >= 12 ? db.slice(2) : db;
+
+  if (coreA === coreB) return true;
+
+  // Compara DDD + últimos 8 dígitos (ignora nono dígito se um tiver e outro não)
+  if (coreA.length >= 10 && coreB.length >= 10) {
+    const dddA = coreA.slice(0, 2);
+    const dddB = coreB.slice(0, 2);
+    if (dddA === dddB) {
+      const last8A = coreA.slice(-8);
+      const last8B = coreB.slice(-8);
+      if (last8A === last8B) return true;
+    }
+  }
+
+  // Fallback para os últimos 8 dígitos gerais
+  if (da.length >= 8 && db.length >= 8 && da.slice(-8) === db.slice(-8)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Prepares a phone number for the WhatsApp service without assuming a country.
+ * Keeps an explicit international marker ("+" or "00") so the backend can
+ * distinguish "+51 987..." (Peru) from "51 987..." (Porto Alegre, BR).
+ * Country detection (+55 for bare Brazilian numbers) happens in whatsapp-service.
+ */
 export function toDialablePhone(raw: string): string {
   const trimmed = (raw || '').trim();
   let digits = trimmed.replace(/\D/g, '');
@@ -17,13 +89,28 @@ export function toDialablePhone(raw: string): string {
   }
 
   if (!digits) return '';
-  return international ? `+${digits}` : digits;
+
+  // Se for número nacional brasileiro (10 ou 11 dígitos), formata como +55
+  if (!international && (digits.length === 10 || digits.length === 11)) {
+    return `+55${digits}`;
+  }
+
+  return international ? `+${digits}` : `+${digits}`;
 }
 
 /** Renders a phone for display with exactly one leading "+". */
 export function formatPhoneDisplay(phone: string): string {
   const digits = (phone || '').replace(/\D/g, '');
-  return digits ? `+${digits}` : '';
+  if (!digits) return '';
+  if (digits.startsWith('55') && digits.length >= 12) {
+    const ddd = digits.slice(2, 4);
+    const rest = digits.slice(4);
+    if (rest.length === 9) {
+      return `+55 (${ddd}) ${rest.slice(0, 5)}-${rest.slice(5)}`;
+    }
+    return `+55 (${ddd}) ${rest.slice(0, 4)}-${rest.slice(4)}`;
+  }
+  return `+${digits}`;
 }
 
 export const BRAZILIAN_DDDS = new Set([

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sendWhatsAppMessage } from '@/lib/whatsapp';
 import { insertWhatsAppLog } from '@/lib/supabase';
+import { interpolateVariables } from '@/lib/templateInterpolation';
 
 export async function POST(request: Request) {
   try {
@@ -14,12 +15,21 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await sendWhatsAppMessage({ phone, message, media_url });
+    // Camada de segurança: garante que qualquer tag {saudacao}, {{nome}}, etc. seja resolvida antes do envio
+    const resolvedMessage = interpolateVariables(message, {
+      nome: lead_name,
+      empresa: company,
+      cidade: city,
+      categoria: category,
+      telefone: phone
+    });
+
+    const result = await sendWhatsAppMessage({ phone, message: resolvedMessage, media_url });
 
     // Registrar log no Supabase
     insertWhatsAppLog({
       phone,
-      message,
+      message: resolvedMessage,
       media_url,
       lead_name,
       company,
