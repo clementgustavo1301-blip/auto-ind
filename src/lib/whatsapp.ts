@@ -14,6 +14,27 @@ export function getServiceUrl(): string {
   return (process.env.WHATSAPP_SERVICE_URL || 'http://localhost:5001').trim().replace(/\/+$/, '');
 }
 
+/**
+ * Helper interno para chamadas HTTP ao microserviço WhatsApp,
+ * incluindo automaticamente os headers necessários para bypass de aviso do ngrok e Cloudflare.
+ */
+async function fetchWhatsAppService(pathOrUrl: string, init?: RequestInit): Promise<Response> {
+  const url = pathOrUrl.startsWith('http') 
+    ? pathOrUrl 
+    : `${getServiceUrl()}${pathOrUrl.startsWith('/') ? pathOrUrl : '/' + pathOrUrl}`;
+
+  const headers = new Headers(init?.headers || {});
+  headers.set('ngrok-skip-browser-warning', 'true');
+  if (!headers.has('User-Agent')) {
+    headers.set('User-Agent', 'AutoInd-WhatsAppClient/1.0');
+  }
+
+  return fetch(url, {
+    ...init,
+    headers,
+  });
+}
+
 export interface WhatsAppSendOptions {
   phone: string;
   message: string;
@@ -84,10 +105,10 @@ const globalPhoneLocks: Map<string, number> = ((global as any).__waPhoneLocks =
  */
 export async function clearWhatsAppQueue(phone?: string): Promise<boolean> {
   try {
-    const url = phone
-      ? `${getServiceUrl()}/api/queue?phone=${encodeURIComponent(phone)}`
-      : `${getServiceUrl()}/api/queue`;
-    const res = await fetch(url, {
+    const path = phone
+      ? `/api/queue?phone=${encodeURIComponent(phone)}`
+      : `/api/queue`;
+    const res = await fetchWhatsAppService(path, {
       method: 'DELETE',
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
@@ -156,7 +177,7 @@ export async function sendWhatsAppMessage(
   }
 
   try {
-    const res = await fetch(`${getServiceUrl()}/api/send`, {
+    const res = await fetchWhatsAppService('/api/send', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -208,7 +229,7 @@ let forceDisconnected = false;
  */
 export async function getWhatsAppStatus(): Promise<WhatsAppStatusResponse | null> {
   try {
-    const res = await fetch(`${getServiceUrl()}/api/status`, {
+    const res = await fetchWhatsAppService('/api/status', {
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
@@ -245,7 +266,7 @@ export async function getWhatsAppStatus(): Promise<WhatsAppStatusResponse | null
  */
 export async function getWhatsAppQueue(): Promise<WhatsAppQueueItem[]> {
   try {
-    const res = await fetch(`${getServiceUrl()}/api/queue`, {
+    const res = await fetchWhatsAppService('/api/queue', {
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
@@ -265,7 +286,7 @@ export async function getWhatsAppQueue(): Promise<WhatsAppQueueItem[]> {
  */
 export async function getWhatsAppConfig(): Promise<WhatsAppAntiBanConfig | null> {
   try {
-    const res = await fetch(`${getServiceUrl()}/api/config`, {
+    const res = await fetchWhatsAppService('/api/config', {
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
@@ -285,7 +306,7 @@ export async function updateWhatsAppConfig(
   newConfig: Partial<WhatsAppAntiBanConfig>
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${getServiceUrl()}/api/config`, {
+    const res = await fetchWhatsAppService('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newConfig),
@@ -317,12 +338,12 @@ export interface WhatsAppQRResponse {
 export async function getWhatsAppQR(): Promise<WhatsAppQRResponse | null> {
   try {
     const [qrRes, statusRes] = await Promise.all([
-      fetch(`${getServiceUrl()}/api/qr?format=json`, {
+      fetchWhatsAppService('/api/qr?format=json', {
         cache: 'no-store',
         headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(5000),
       }),
-      fetch(`${getServiceUrl()}/api/status`, {
+      fetchWhatsAppService('/api/status', {
         cache: 'no-store',
         signal: AbortSignal.timeout(5000),
       }).catch(() => null),
@@ -361,7 +382,7 @@ export async function getWhatsAppQR(): Promise<WhatsAppQRResponse | null> {
 export async function disconnectWhatsApp(): Promise<boolean> {
   forceDisconnected = true;
   try {
-    const res = await fetch(`${getServiceUrl()}/api/disconnect`, {
+    const res = await fetchWhatsAppService('/api/disconnect', {
       method: 'POST',
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
@@ -387,7 +408,7 @@ export async function checkWhatsAppNumbers(
 ): Promise<Record<string, boolean> | null> {
   if (!phones || phones.length === 0) return {};
   try {
-    const res = await fetch(`${getServiceUrl()}/api/check`, {
+    const res = await fetchWhatsAppService('/api/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phones }),
@@ -409,7 +430,7 @@ export async function checkWhatsAppNumbers(
  */
 export async function getWhatsAppInbound(): Promise<WhatsAppInboundMessage[]> {
   try {
-    const res = await fetch(`${getServiceUrl()}/api/inbound`, {
+    const res = await fetchWhatsAppService('/api/inbound', {
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
@@ -428,10 +449,10 @@ export async function getWhatsAppInbound(): Promise<WhatsAppInboundMessage[]> {
  */
 export async function clearWhatsAppInbound(id?: string): Promise<boolean> {
   try {
-    const url = id
-      ? `${getServiceUrl()}/api/inbound?id=${encodeURIComponent(id)}`
-      : `${getServiceUrl()}/api/inbound`;
-    const res = await fetch(url, {
+    const path = id
+      ? `/api/inbound?id=${encodeURIComponent(id)}`
+      : `/api/inbound`;
+    const res = await fetchWhatsAppService(path, {
       method: 'DELETE',
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
