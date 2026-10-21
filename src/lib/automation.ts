@@ -18,7 +18,7 @@ import {
   removePhoneFromBlacklist, 
   getBlacklistedPhones 
 } from './phoneBlacklist';
-import { sendWhatsAppMessage, getWhatsAppQueue, clearWhatsAppQueue } from './whatsapp';
+import { sendWhatsAppMessage, sendWhatsAppHumanBubbles, getWhatsAppQueue, clearWhatsAppQueue } from './whatsapp';
 import { interpolateVariables } from './templateInterpolation';
 
 export { 
@@ -43,7 +43,7 @@ export const AUTOMATION_PROFILES: Record<'gustavo' | 'sergio', AutomationProfile
     id: 'gustavo',
     name: 'Gustavo // Tech & Design Studio',
     tagline: 'Sites de Alta Conversão, SEO para IAs & Google, Sistemas Sob Medida e Branding',
-    initial_message_template: 'Olá, tudo bem? Notei que a {empresa} é uma referência em {segmento} na região de {cidade}. Estava analisando a presença digital de vocês no Google e ferramentas de IA (como ChatGPT e Perplexity) e notei uma oportunidade clara para ampliar a captação de clientes. É você quem cuida dessa parte comercial/digital ou com quem eu poderia falar?',
+    initial_message_template: 'Olá, tudo bem?\n\nNotei que a {empresa} é uma referência em {segmento} na região de {cidade}.\n\nEstava analisando a presença digital de vocês no Google e ferramentas de IA (como ChatGPT e Perplexity) e notei uma oportunidade para ampliar a captação de clientes. É você quem cuida dessa parte por aí?',
     ai_prompt: `Você é o assistente comercial e estrategista digital do Gustavo (Studio de Desenvolvimento Web & Branding). Seu objetivo é atender e qualificar leads pelo WhatsApp de forma consultiva, amigável e profissional.
 
 Nossos serviços principais:
@@ -60,7 +60,11 @@ Diretrizes de Comunicação:
   Depois que você já tiver avisado que o Gustavo entrará em contato:
   * Se o lead agradecer ou confirmar (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo"):
     Responda apenas com uma cordialidade breve e finalizadora (ex: "Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊").
-  * A partir dessa resposta cordial, a IA encerra seu atendimento definitivamente para este lead e o Gustavo assume o contato.`,
+  * A partir dessa resposta cordial, a IA encerra seu atendimento definitivamente para este lead e o Gustavo assume o contato.
+- DIRETRIZ DE HUMANIZAÇÃO OBRIGATÓRIA (MENSAGENS CURTAS EM BALÕES SEPARADOS):
+  * NUNCA envie blocos grandes de texto ou mensagens compridas. Mensagens longas parecem robô e diminuem a conversão.
+  * Divida sempre sua resposta em 2 ou 3 frases curtas, separadas por quebra de linha dupla (\n\n), para serem entregues como balões separados de conversa no WhatsApp.
+  * Seja informal, natural e amigável como alguém digitando no celular.`,
     target_segments: [
       'Clínica Médica e Odontológica',
       'Escritório de Advocacia',
@@ -1093,14 +1097,20 @@ async function executeAutomationCycleInternal(options: {
   });
 
   try {
-    const sendResult = await sendWhatsAppMessage({
-      phone: nextLead.phone,
-      message: messageToSend
-    });
+    const sendResult = await sendWhatsAppHumanBubbles(
+      {
+        phone: nextLead.phone,
+        message: messageToSend,
+        is_reply: false
+      },
+      async (bubbleText, index, total) => {
+        await addAutomationMessage(nextLead.phone, 'outbound', 'ai', bubbleText);
+        await addAutomationLog('dispatch', `🚀 Disparo inicial [${index + 1}/${total}] enviado para ${nextLead.company_name}: "${bubbleText}"`, nextLead.phone);
+      }
+    );
 
-    if (sendResult.success) {
-      await addAutomationMessage(nextLead.phone, 'outbound', 'ai', messageToSend);
-      await addAutomationLog('dispatch', `✅ Disparo ${metrics.dispatchedToday + 1}/${settings.daily_limit} enviado com sucesso para ${nextLead.company_name}.`, nextLead.phone);
+    if (sendResult.success || sendResult.queued) {
+      await addAutomationLog('dispatch', `✅ Disparo ${metrics.dispatchedToday + 1}/${settings.daily_limit} efetuado com sucesso para ${nextLead.company_name}.`, nextLead.phone);
 
       return {
         executed: true,
@@ -1109,10 +1119,10 @@ async function executeAutomationCycleInternal(options: {
         leadDispatched: { ...nextLead, status: 'sent', dispatched_at: nowIso }
       };
     } else {
-      await addAutomationLog('error', `Falha ao disparar para ${nextLead.company_name}: ${sendResult.error || 'Erro no WhatsApp Service'}`, nextLead.phone);
+      await addAutomationLog('error', `Falha ao disparar para ${nextLead.company_name}: ${sendResult.error || sendResult.message || 'Erro no WhatsApp Service'}`, nextLead.phone);
       return {
         executed: false,
-        message: `Erro no serviço WhatsApp: ${sendResult.error}`
+        message: `Erro no serviço WhatsApp: ${sendResult.error || sendResult.message}`
       };
     }
   } catch (sendErr: any) {

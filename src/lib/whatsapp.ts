@@ -40,6 +40,7 @@ export interface WhatsAppSendOptions {
   message: string;
   media_url?: string;
   is_reply?: boolean;
+  skip_interval_check?: boolean;
 }
 
 export interface WhatsAppInboundMessage {
@@ -120,7 +121,141 @@ export async function clearWhatsAppQueue(phone?: string): Promise<boolean> {
 }
 
 import { isBlacklistedPhone } from './phoneBlacklist';
-import { isWhatsAppGroup } from './phone';
+import { isWhatsAppGroup, cleanPhoneDigits } from './phone';
+
+/**
+ * Divide textos longos em 2 a 3 balões humanizados e naturais de WhatsApp
+ */
+export function splitIntoHumanBubbles(text: string, maxBubbles = 3): string[] {
+  if (!text) return [];
+  const cleaned = text.trim();
+
+  // 1. Se o texto tiver quebras de linha explícitas (\n ou \n\n)
+  const lineBlocks = cleaned
+    .split(/\r?\n+/)
+    .map(b => b.trim())
+    .filter(Boolean);
+
+  if (lineBlocks.length > 1) {
+    const result: string[] = [];
+    for (const block of lineBlocks) {
+      if (result.length < maxBubbles) {
+        result.push(block);
+      } else {
+        result[result.length - 1] += ' ' + block;
+      }
+    }
+    return result;
+  }
+
+  // Se for curto e sem quebras, mantém em 1 balão
+  if (cleaned.length <= 90) {
+    return [cleaned];
+  }
+
+  // 2. Se for um bloco contínuo longo, divide por frases (. ? !)
+  const sentenceRegex = /([^.?!]+[.?!]+(?:\s+|$))/g;
+  const matches = cleaned.match(sentenceRegex);
+
+  if (!matches || matches.length <= 1) {
+    return [cleaned];
+  }
+
+  const sentences = matches.map(s => s.trim()).filter(Boolean);
+  if (sentences.length <= 1) {
+    return [cleaned];
+  }
+
+  if (sentences.length === 2) {
+    return sentences;
+  } else if (sentences.length === 3) {
+    return sentences;
+  } else {
+    const b1 = sentences[0];
+    const b2 = sentences.slice(1, -1).join(' ');
+    const b3 = sentences[sentences.length - 1];
+    return [b1, b2, b3];
+  }
+}
+
+/**
+ * Aguarda a fila do microserviço ficar livre para um número (evita erro de colisão na fila)
+ */
+async function waitForPhoneQueueIdle(phone: string, maxWaitMs = 20000): Promise<boolean> {
+  const start = Date.now();
+  const digits = cleanPhoneDigits(phone);
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const queue = await getWhatsAppQueue();
+      const isBusy = (queue || []).some(item => {
+        const d = cleanPhoneDigits(item.phone);
+        const match = d === digits || (d.length >= 8 && digits.length >= 8 && d.slice(-8) === digits.slice(-8));
+        return match && (item.status === 'queued' || item.status === 'typing');
+      });
+      if (!isBusy) {
+        return true;
+      }
+    } catch {
+      break;
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  return true;
+}
+
+/**
+ * Envia mensagens divididas em múltiplos balões humanizados sequenciais
+ */
+export async function sendWhatsAppHumanBubbles(
+  options: WhatsAppSendOptions,
+  onBubbleSent?: (bubbleText: string, index: number, total: number) => Promise<void>
+): Promise<WhatsAppSendResponse> {
+  const bubbles = splitIntoHumanBubbles(options.message);
+
+  if (bubbles.length <= 1) {
+    const res = await sendWhatsAppMessage(options);
+    if ((res.success || res.queued) && onBubbleSent) {
+      await onBubbleSent(options.message, 0, 1).catch(() => {});
+    }
+    return res;
+  }
+
+  let lastResponse: WhatsAppSendResponse = {
+    success: true,
+    queued: true,
+    queue_id: '',
+    queue_position: 1,
+    message: 'Balões humanizados enfileirados'
+  };
+
+  for (let i = 0; i < bubbles.length; i++) {
+    const bubble = bubbles[i];
+    if (i > 0) {
+      // Aguarda o celular enviar e liberar a anterior
+      await waitForPhoneQueueIdle(options.phone, 20000);
+      // Pausa humanizada entre a entrega de um balão e a digitação do próximo (1.5s a 2.5s)
+      await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+    }
+
+    const res = await sendWhatsAppMessage({
+      ...options,
+      message: bubble,
+      skip_interval_check: true
+    });
+
+    if (res.success || res.queued) {
+      if (onBubbleSent) {
+        await onBubbleSent(bubble, i, bubbles.length).catch(() => {});
+      }
+      lastResponse = res;
+    } else {
+      console.warn(`[HumanBubbles] Falha ao enviar balão ${i + 1}/${bubbles.length}:`, res.message);
+      return res;
+    }
+  }
+
+  return lastResponse;
+}
 
 /**
  * Enfileira uma mensagem para disparo sequencial humanizado
@@ -161,11 +296,11 @@ export async function sendWhatsAppMessage(
     };
   }
 
-  // Trava anti-flood: para prospecção fria, exige 60s; para respostas da IA, exige 8s
+  // Trava anti-flood: para prospecção fria, exige 60s; para respostas da IA, exige 8s (ignorado para balões subsequentes)
   const minIntervalMs = params.is_reply ? 8000 : 60000;
   const lastSent = globalPhoneLocks.get(digits) || 0;
   const timeSinceLast = Date.now() - lastSent;
-  if (timeSinceLast < minIntervalMs) {
+  if (!params.skip_interval_check && timeSinceLast < minIntervalMs) {
     console.warn(`[WhatsApp Anti-Flood] Disparo ignorado para ${params.phone}: enviado há ${Math.round(timeSinceLast / 1000)}s.`);
     return {
       success: false,

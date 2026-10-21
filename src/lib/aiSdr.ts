@@ -14,7 +14,7 @@ import {
   addAutomationLog,
   getAutomationLeads
 } from './automation';
-import { sendWhatsAppMessage, getWhatsAppInbound, clearWhatsAppInbound } from './whatsapp';
+import { sendWhatsAppMessage, sendWhatsAppHumanBubbles, getWhatsAppInbound, clearWhatsAppInbound } from './whatsapp';
 import { toDialablePhone, isSamePhone, cleanPhoneDigits, isWhatsAppGroup } from './phone';
 import { isBlacklistedPhone } from './phoneBlacklist';
 import { supabase } from './supabase';
@@ -156,8 +156,8 @@ function analyzeHeuristic(
   if (alreadyPromisedContact && isThankYouOrPoliteClosing(incomingText)) {
     return {
       replyMessage: profile === 'sergio'
-        ? 'Por nada! Em breve nosso consultor comercial fala com você. Tenha um excelente dia! 😊'
-        : 'Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊',
+        ? 'Por nada!\n\nEm breve nosso consultor comercial fala com você. Tenha um excelente dia! 😊'
+        : 'Por nada!\n\nEm breve o Gustavo fala com você. Tenha um excelente dia! 😊',
       interestLevel: 'high',
       qualificationStatus: 'qualified',
       notes: 'Lead agradeceu após confirmação de contato. Atendimento transferido definitivamente para o humano.',
@@ -186,7 +186,7 @@ function analyzeHeuristic(
   if (hasExplicitInterest) {
     if (profile === 'sergio') {
       return {
-        replyMessage: `Perfeito! Nós fornecemos sal industrial direto com entrega programada e laudo técnico. Qual a estimativa de consumo mensal ou tipo de sal (grosso, moído ou refinado) que a ${lead.company_name} mais consome? Nosso consultor comercial já vai formalizar a tabela para vocês.`,
+        replyMessage: `Perfeito!\n\nNós fornecemos sal industrial direto com entrega programada e laudo técnico.\n\nQual a estimativa de consumo mensal ou tipo de sal (grosso, moído ou refinado) que a ${lead.company_name} mais consome? Nosso consultor já vai formalizar a tabela para vocês.`,
         interestLevel: 'high',
         qualificationStatus: 'qualified',
         notes: `Lead declarou interesse explícito em cotação/produtos: "${incomingText.slice(0, 100)}"`,
@@ -194,7 +194,7 @@ function analyzeHeuristic(
       };
     }
     return {
-      replyMessage: `Perfeito! Nós desenvolvemos sites institucionais de alta conversão, sistemas sob medida e estratégias de SEO para o Google e IAs. Vocês já têm um site que gostariam de modernizar ou seria um projeto novo para a ${lead.company_name}? O Gustavo pode preparar uma prévia de proposta personalizada para vocês.`,
+      replyMessage: `Perfeito!\n\nNós desenvolvemos sites institucionais de alta conversão, sistemas sob medida e estratégias de SEO para o Google e IAs.\n\nVocês já têm um site que gostariam de modernizar ou seria um projeto novo para a ${lead.company_name}? O Gustavo pode preparar uma prévia de proposta personalizada para vocês.`,
       interestLevel: 'high',
       qualificationStatus: 'qualified',
       notes: `Lead declarou interesse explícito em serviços: "${incomingText.slice(0, 100)}"`,
@@ -205,7 +205,7 @@ function analyzeHeuristic(
   // 3. Qualquer outra mensagem (saudações, "sim", "teste", dúvidas) permanece ESTRITAMENTE em 'chatting' (NUNCA qualifica antecipadamente)
   if (profile === 'sergio') {
     return {
-      replyMessage: `Olá! Somos fornecedores especializados em sal industrial (grosso, moído, refinado e micronizado) para indústrias e tratamento. Vocês utilizam sal na operação da ${lead.company_name}?`,
+      replyMessage: `Olá, tudo bem?\n\nSomos fornecedores especializados em sal industrial (grosso, moído, refinado e micronizado) para indústrias e tratamento.\n\nVocês utilizam sal na operação da ${lead.company_name}?`,
       interestLevel: 'medium',
       qualificationStatus: 'chatting',
       notes: `Mensagem em conversa: "${incomingText.slice(0, 80)}"`,
@@ -214,7 +214,7 @@ function analyzeHeuristic(
   }
 
   return {
-    replyMessage: `Olá! O Gustavo lidera um studio especializado em criação de sites institucionais de alta conversão, sistemas web sob medida, branding e estratégias para empresas serem recomendadas no Google e em ferramentas de IA. Gostariam de uma análise rápida da presença digital da ${lead.company_name}?`,
+    replyMessage: `Olá, tudo bem?\n\nO Gustavo lidera um studio especializado em criação de sites de alta conversão, sistemas web sob medida e estratégias para empresas serem recomendadas no Google e em ferramentas de IA.\n\nGostariam de uma análise rápida da presença digital da ${lead.company_name}?`,
     interestLevel: 'medium',
     qualificationStatus: 'chatting',
     notes: `Mensagem em conversa: "${incomingText.slice(0, 80)}"`,
@@ -261,9 +261,14 @@ REGRAS OBRIGATÓRIAS E RESTRITAS DE STATUS (SIGA COM RIGOR ABSOLUTO):
    - Se o lead já agradeceu e já recebeu essa resposta cordial final:
      NÃO responda mais nada ("replyMessage": "").
 
+DIRETRIZ DE HUMANIZAÇÃO OBRIGATÓRIA (MENSAGENS CURTAS EM BALÕES SEPARADOS):
+- NUNCA envie blocos grandes de texto ou mensagens longas. Mensagens longas parecem robô e diminuem a resposta.
+- Divida sempre sua resposta em 2 ou 3 frases curtas, separadas por quebra de linha dupla (\n\n), para serem entregues como balões separados de conversa no WhatsApp.
+- Seja informal, amigável e direto como alguém digitando no WhatsApp pelo celular.
+
 Responda em formato estritamente JSON:
 {
-  "replyMessage": "Sua resposta amigável, curta e direta (máximo 2 a 3 frases em português brasileiro).",
+  "replyMessage": "Sua resposta amigável e curta, dividida em 2 ou 3 frases curtas separadas por \\n\\n para formar balões separados no WhatsApp.",
   "interestLevel": "high" | "medium" | "none" | "unknown",
   "qualificationStatus": "qualified" | "disqualified" | "chatting",
   "notes": "Resumo do que o lead precisa em 1 frase.",
@@ -486,14 +491,19 @@ export async function processIncomingWhatsAppMessage(
       });
 
       try {
-        const sendRes = await sendWhatsAppMessage({
-          phone: targetPhone,
-          message: cordialReply,
-          is_reply: true
-        });
-        if (sendRes.success || sendRes.queued) {
-          await addAutomationMessage(targetPhone, 'outbound', 'ai', cordialReply);
-          await addAutomationLog('dispatch', `🤝 Lead agradeceu. IA foi cordial e transferiu controle definitivo para Gustavo: "${cordialReply}"`, targetPhone);
+        const sendRes = await sendWhatsAppHumanBubbles(
+          {
+            phone: targetPhone,
+            message: cordialReply,
+            is_reply: true
+          },
+          async (bubbleText, index, total) => {
+            await addAutomationMessage(targetPhone, 'outbound', 'ai', bubbleText);
+            await addAutomationLog('dispatch', `🤝 IA foi cordial [${index + 1}/${total}] e transferiu controle para Gustavo: "${bubbleText}"`, targetPhone);
+          }
+        );
+        if (!sendRes.success && !sendRes.queued) {
+          console.warn('[AI SDR] Falha ao enviar resposta cordial:', sendRes.message);
         }
       } catch (err: any) {
         console.error('[AI SDR] Erro ao enviar resposta cordial de encerramento:', err);
@@ -555,15 +565,18 @@ export async function processIncomingWhatsAppMessage(
   if (analysis.replyMessage && !isWithinCooldown) {
     lastAiReplyTimestampByPhone.set(cleanIncoming, Date.now());
     try {
-      const sendRes = await sendWhatsAppMessage({
-        phone: targetPhone,
-        message: analysis.replyMessage,
-        is_reply: true
-      });
-      if (sendRes.success || sendRes.queued) {
-        await addAutomationMessage(targetPhone, 'outbound', 'ai', analysis.replyMessage);
-        await addAutomationLog('dispatch', `🤖 IA SDR respondeu para ${currentLead.company_name}: "${analysis.replyMessage.slice(0, 80)}..."`, targetPhone);
-      } else {
+      const sendRes = await sendWhatsAppHumanBubbles(
+        {
+          phone: targetPhone,
+          message: analysis.replyMessage,
+          is_reply: true
+        },
+        async (bubbleText, index, total) => {
+          await addAutomationMessage(targetPhone, 'outbound', 'ai', bubbleText);
+          await addAutomationLog('dispatch', `🤖 IA SDR enviou balão [${index + 1}/${total}] para ${currentLead.company_name}: "${bubbleText}"`, targetPhone);
+        }
+      );
+      if (!sendRes.success && !sendRes.queued) {
         await addAutomationLog('error', `⚠️ Falha ao enfileirar resposta da IA para ${currentLead.company_name}: ${sendRes.error || sendRes.message}`, targetPhone);
       }
     } catch (e: any) {
