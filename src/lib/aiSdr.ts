@@ -28,6 +28,92 @@ interface AIQualificationResult {
 }
 
 /**
+ * Normaliza texto removendo acentos, pontuação e espaços extras
+ */
+function normalizeText(text: string): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.,!?;:()_\\-—]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Verifica se o lead enviou uma mensagem de agradecimento ou confirmação cordial
+ * (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo")
+ */
+export function isThankYouOrPoliteClosing(text: string): boolean {
+  if (!text) return false;
+  const t = normalizeText(text);
+
+  const politeTokens = [
+    'obrigado', 'obrigada', 'obg', 'valeu', 'vlw', 'show', 'show de bola',
+    'perfeito', 'combinado', 'combinados', 'blz', 'beleza', 'ok', 'okk', 'okay',
+    'certo', 'tks', 'thanks', 'thx', 'agradeco', 'agradecemos',
+    'otimo', 'ta bom', 'tabom', 'ta certo',
+    'aguardo', 'no aguardo', 'maravilha', 'muito obrigado', 'muito obrigada',
+    'fechado', 'tranquilo', 'disponha', 'abraco', 'forte abraco',
+    'ate breve', 'ate logo', 'tmj', 'top'
+  ];
+
+  if (politeTokens.includes(t)) return true;
+
+  if (t.length <= 50 && politeTokens.some(token => t === token || t.startsWith(token + ' ') || t.endsWith(' ' + token) || t.includes(' ' + token + ' '))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Verifica se em mensagens anteriores enviadas ao lead já foi prometido que o Gustavo (ou consultor) entrará em contato
+ */
+export function checkAlreadyPromisedContact(history: AutomationMessage[]): boolean {
+  return history.some(m => {
+    if (m.direction !== 'outbound') return false;
+    const text = normalizeText(m.content);
+    const hasName = text.includes('gustavo') || text.includes('consultor');
+    const hasContactAction =
+      text.includes('contato') ||
+      text.includes('falar') ||
+      text.includes('proposta') ||
+      text.includes('chamar') ||
+      text.includes('preparar') ||
+      text.includes('apresentar') ||
+      text.includes('tabela') ||
+      text.includes('formalizar');
+    return hasName && hasContactAction;
+  });
+}
+
+/**
+ * Verifica se a mensagem cordial final de despedida ("Por nada! Em breve o Gustavo fala com você...") já foi enviada
+ */
+export function checkAlreadySentCordialClosing(history: AutomationMessage[]): boolean {
+  return history.some(m => {
+    if (m.direction !== 'outbound') return false;
+    const t = normalizeText(m.content);
+    const isCordial =
+      t.includes('por nada') ||
+      t.includes('disponha') ||
+      t.includes('otimo dia') ||
+      t.includes('excelente dia') ||
+      t.includes('bom dia') ||
+      t.includes('bom trabalho');
+    const mentionsHandoff =
+      t.includes('gustavo') ||
+      t.includes('consultor') ||
+      t.includes('fala com voce') ||
+      t.includes('entra em contato') ||
+      t.includes('dia');
+    return isCordial && mentionsHandoff;
+  });
+}
+
+/**
  * Motor de Análise Heurística (Executa quando o usuário ainda não adicionou API Key da IA)
  */
 function analyzeHeuristic(
@@ -61,6 +147,20 @@ function analyzeHeuristic(
         shouldNotifyHuman: false
       };
     }
+  }
+
+  // 1.1 Regra de Handoff e Encerramento: se a IA já prometeu o contato e o lead agradece
+  const alreadyPromisedContact = checkAlreadyPromisedContact(history);
+  if (alreadyPromisedContact && isThankYouOrPoliteClosing(incomingText)) {
+    return {
+      replyMessage: profile === 'sergio'
+        ? 'Por nada! Em breve nosso consultor comercial fala com você. Tenha um excelente dia! 😊'
+        : 'Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊',
+      interestLevel: 'high',
+      qualificationStatus: 'qualified',
+      notes: 'Lead agradeceu após confirmação de contato. Atendimento transferido definitivamente para o humano.',
+      shouldNotifyHuman: true
+    };
   }
 
   // 2. Padrões de Interesse Explícito (Qualifica APENAS se disser claramente que tem interesse ou solicitar cotação/proposta)
@@ -152,6 +252,12 @@ REGRAS OBRIGATÓRIAS E RESTRITAS DE STATUS (SIGA COM RIGOR ABSOLUTO):
 1. "qualified": Atribua "qualified" (e interestLevel "high") EXCLUSIVAMENTE se o lead declarou EXPRESSAMENTE que TEM INTERESSE (ex: "tenho interesse", "quero saber mais", "pode mandar uma proposta", "quanto custa?", "me envia a cotação/tabela").
 2. "disqualified": Atribua "disqualified" (e interestLevel "none") se o lead disse que NÃO TEM INTERESSE, que não quer, que já tem fornecedor/site/equipe ou pediu para retirar. A resposta da IA deve ser breve, cordial e agradecendo pelo tempo.
 3. "chatting": Para QUALQUER outra resposta (como "sim", "olá", "bom dia", "teste", "quem é?", "como funciona?"), o status DEVE ser estritamente "chatting" (interestLevel "medium"). NUNCA qualifique antes do lead declarar interesse explícito!
+4. "handoff": Se no histórico você já avisou que o Gustavo (ou consultor) entrará em contato:
+   - Se o lead agradecer ou confirmar (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo", "show"):
+     Responda apenas com uma cordialidade breve e finalizadora (ex: "Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊").
+     Defina "shouldNotifyHuman": true e "qualificationStatus": "qualified".
+   - Se o lead já agradeceu e já recebeu essa resposta cordial final:
+     NÃO responda mais nada ("replyMessage": "").
 
 Responda em formato estritamente JSON:
 {
@@ -337,6 +443,67 @@ export async function processIncomingWhatsAppMessage(
 
   const settings = await getAutomationSettings();
   const history = await getAutomationMessages(targetPhone);
+
+  // 🛡️ REGRA CRÍTICA DE HANDOFF GUSTAVO / OPERADOR HUMANO:
+  // "depois que a ia disser que gustavo vai entrar em contato, se a pessoa agradecer ai ele é cordial e dai em diante ele n responde mais"
+  const previousMessages = history.slice(0, -1);
+  const alreadyPromisedContact = checkAlreadyPromisedContact(previousMessages);
+  const alreadySentCordialClosing = checkAlreadySentCordialClosing(previousMessages);
+
+  if (alreadyPromisedContact) {
+    // Caso 1: O lead já havia agradecido e a IA já enviou a resposta cordial de encerramento anteriormente
+    // "e dai em diante ele n responde mais" -> Silêncio total da IA e ativa human_takeover!
+    if (alreadySentCordialClosing) {
+      console.log(`[AI SDR Handoff] Lead ${lead.company_name} já recebeu encerramento cordial. IA silenciada definitivamente para o Gustavo assumir.`);
+      await updateAutomationLead(targetPhone, {
+        human_takeover: true,
+        last_reply_at: nowIso
+      });
+      await addAutomationLog('reply', `💬 Mensagem recebida de ${lead.company_name}: "${trimmedText.slice(0, 80)}" (Atendimento exclusivo do Gustavo - IA em silêncio)`, targetPhone);
+      return {
+        success: true,
+        replied: false,
+        lead: { ...currentLead, human_takeover: true, last_reply_at: nowIso }
+      };
+    }
+
+    // Caso 2: O lead está agradecendo ou confirmando (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo")
+    // "se a pessoa agradecer ai ele é cordial e dai em diante ele n responde mais"
+    if (isThankYouOrPoliteClosing(trimmedText)) {
+      const isSergio = settings.profile === 'sergio';
+      const cordialReply = isSergio
+        ? 'Por nada! Em breve nosso consultor comercial fala com você. Tenha um excelente dia! 😊'
+        : 'Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊';
+
+      await updateAutomationLead(targetPhone, {
+        human_takeover: true, // Bloqueia permanentemente respostas futuras da IA para este lead
+        status: 'qualified',
+        interest_level: 'high',
+        qualification_notes: 'Lead agradeceu após confirmação de contato. Atendimento transferido definitivamente para o Gustavo.',
+        last_reply_at: nowIso
+      });
+
+      try {
+        const sendRes = await sendWhatsAppMessage({
+          phone: targetPhone,
+          message: cordialReply,
+          is_reply: true
+        });
+        if (sendRes.success || sendRes.queued) {
+          await addAutomationMessage(targetPhone, 'outbound', 'ai', cordialReply);
+          await addAutomationLog('dispatch', `🤝 Lead agradeceu. IA foi cordial e transferiu controle definitivo para Gustavo: "${cordialReply}"`, targetPhone);
+        }
+      } catch (err: any) {
+        console.error('[AI SDR] Erro ao enviar resposta cordial de encerramento:', err);
+      }
+
+      return {
+        success: true,
+        replied: true,
+        lead: { ...currentLead, human_takeover: true, status: 'qualified', interest_level: 'high', last_reply_at: nowIso }
+      };
+    }
+  }
 
   // 1. Tenta qualificação via LLM (se houver chave de IA), senão usa Heurística especializada
   let analysis = await callLLM(settings, currentLead, trimmedText, history);
