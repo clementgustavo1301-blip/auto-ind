@@ -36,14 +36,14 @@ function normalizeText(text: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[.,!?;:()_\\-—]/g, ' ')
+    .replace(/[-.,!?;:()_—]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 /**
  * Verifica se o lead enviou uma mensagem de agradecimento ou confirmação cordial
- * (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo")
+ * (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo", "ate", etc.)
  */
 export function isThankYouOrPoliteClosing(text: string): boolean {
   if (!text) return false;
@@ -53,10 +53,10 @@ export function isThankYouOrPoliteClosing(text: string): boolean {
     'obrigado', 'obrigada', 'obg', 'valeu', 'vlw', 'show', 'show de bola',
     'perfeito', 'combinado', 'combinados', 'blz', 'beleza', 'ok', 'okk', 'okay',
     'certo', 'tks', 'thanks', 'thx', 'agradeco', 'agradecemos',
-    'otimo', 'ta bom', 'tabom', 'ta certo',
+    'otimo', 'ta bom', 'tabom', 'ta certo', 'tudo bem',
     'aguardo', 'no aguardo', 'maravilha', 'muito obrigado', 'muito obrigada',
     'fechado', 'tranquilo', 'disponha', 'abraco', 'forte abraco',
-    'ate breve', 'ate logo', 'tmj', 'top'
+    'ate breve', 'ate logo', 'ate mais', 'ate', 'tmj', 'top'
   ];
 
   if (politeTokens.includes(t)) return true;
@@ -75,42 +75,44 @@ export function checkAlreadyPromisedContact(history: AutomationMessage[]): boole
   return history.some(m => {
     if (m.direction !== 'outbound') return false;
     const text = normalizeText(m.content);
-    const hasName = text.includes('gustavo') || text.includes('consultor');
+    const hasName = text.includes('gustavo') || text.includes('consultor') || text.includes('especialista');
     const hasContactAction =
       text.includes('contato') ||
       text.includes('falar') ||
-      text.includes('proposta') ||
+      text.includes('falara') ||
+      text.includes('chama') ||
       text.includes('chamar') ||
+      text.includes('chamara') ||
+      text.includes('proposta') ||
       text.includes('preparar') ||
+      text.includes('preparando') ||
       text.includes('apresentar') ||
       text.includes('tabela') ||
-      text.includes('formalizar');
+      text.includes('formalizar') ||
+      text.includes('repassei') ||
+      text.includes('repassar') ||
+      text.includes('analise detalhada');
     return hasName && hasContactAction;
   });
 }
 
 /**
- * Verifica se a mensagem cordial final de despedida ("Por nada! Em breve o Gustavo fala com você...") já foi enviada
+ * Verifica se a mensagem cordial final de despedida / handoff já foi enviada após a promessa de contato
  */
 export function checkAlreadySentCordialClosing(history: AutomationMessage[]): boolean {
-  return history.some(m => {
-    if (m.direction !== 'outbound') return false;
-    const t = normalizeText(m.content);
-    const isCordial =
-      t.includes('por nada') ||
-      t.includes('disponha') ||
-      t.includes('otimo dia') ||
-      t.includes('excelente dia') ||
-      t.includes('bom dia') ||
-      t.includes('bom trabalho');
-    const mentionsHandoff =
-      t.includes('gustavo') ||
-      t.includes('consultor') ||
-      t.includes('fala com voce') ||
-      t.includes('entra em contato') ||
-      t.includes('dia');
-    return isCordial && mentionsHandoff;
-  });
+  let promisedIndex = -1;
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (m.direction === 'outbound' && checkAlreadyPromisedContact([m])) {
+      promisedIndex = i;
+      break;
+    }
+  }
+  if (promisedIndex === -1) return false;
+
+  // Se após a primeira promessa de contato do Gustavo já foi enviada QUALQUER resposta da IA/SDR
+  const messagesAfterPromise = history.slice(promisedIndex + 1);
+  return messagesAfterPromise.some(m => m.direction === 'outbound');
 }
 
 /**
