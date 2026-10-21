@@ -30,3 +30,19 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export async function GET(request: Request) {
+  try {
+    // Permite execução via Vercel Cron ou Healthcheck
+    const result = await runAutomationCycle({ force: false, skipSearch: false });
+    return NextResponse.json(result, {
+      headers: { 'Cache-Control': 'no-store' }
+    });
+  } catch (err: any) {
+    console.error('[RunCycle GET] Erro ao rodar ciclo da automação via cron/GET:', err);
+    return NextResponse.json(
+      { executed: false, error: err.message || 'Erro interno ao executar ciclo' },
+      { status: 500 }
+    );
+  }
+}
