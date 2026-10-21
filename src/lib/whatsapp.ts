@@ -126,7 +126,7 @@ import { isWhatsAppGroup, cleanPhoneDigits } from './phone';
 /**
  * Divide textos longos em 2 a 3 balões humanizados e naturais de WhatsApp
  */
-export function splitIntoHumanBubbles(text: string, maxBubbles = 3): string[] {
+export function splitIntoHumanBubbles(text: string, maxBubbles = 2): string[] {
   if (!text) return [];
   const cleaned = text.trim();
 
@@ -142,7 +142,7 @@ export function splitIntoHumanBubbles(text: string, maxBubbles = 3): string[] {
       if (result.length < maxBubbles) {
         result.push(block);
       } else {
-        result[result.length - 1] += ' ' + block;
+        result[result.length - 1] += '\n\n' + block;
       }
     }
     return result;
@@ -168,13 +168,10 @@ export function splitIntoHumanBubbles(text: string, maxBubbles = 3): string[] {
 
   if (sentences.length === 2) {
     return sentences;
-  } else if (sentences.length === 3) {
-    return sentences;
   } else {
     const b1 = sentences[0];
-    const b2 = sentences.slice(1, -1).join(' ');
-    const b3 = sentences[sentences.length - 1];
-    return [b1, b2, b3];
+    const b2 = sentences.slice(1).join(' ');
+    return [b1, b2];
   }
 }
 
@@ -232,9 +229,9 @@ export async function sendWhatsAppHumanBubbles(
     const bubble = bubbles[i];
     if (i > 0) {
       // Aguarda o celular enviar e liberar a anterior
-      await waitForPhoneQueueIdle(options.phone, 30000);
-      // Pausa humanizada entre a entrega de um balão e o próximo (8s a 10s para garantir margem segura anti-flood no microserviço)
-      await new Promise(r => setTimeout(r, 8000 + Math.random() * 2000));
+      await waitForPhoneQueueIdle(options.phone, 15000);
+      // Pausa humanizada entre a entrega de um balão e o próximo (5.5s a 6s para respeitar a trava do microserviço)
+      await new Promise(r => setTimeout(r, 5500 + Math.random() * 500));
     }
 
     const res = await sendWhatsAppMessage({
