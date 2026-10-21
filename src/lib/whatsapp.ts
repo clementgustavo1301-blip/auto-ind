@@ -233,8 +233,8 @@ export async function sendWhatsAppHumanBubbles(
     if (i > 0) {
       // Aguarda o celular enviar e liberar a anterior
       await waitForPhoneQueueIdle(options.phone, 30000);
-      // Pausa humanizada entre a entrega de um balão e o próximo (mínimo 5.5s para respeitar a trava do microserviço)
-      await new Promise(r => setTimeout(r, 5500 + Math.random() * 1500));
+      // Pausa humanizada entre a entrega de um balão e o próximo (8s a 10s para garantir margem segura anti-flood no microserviço)
+      await new Promise(r => setTimeout(r, 8000 + Math.random() * 2000));
     }
 
     const res = await sendWhatsAppMessage({
