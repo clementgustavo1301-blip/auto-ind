@@ -1064,10 +1064,21 @@ async function executeAutomationCycleInternal(options: {
 
   // 6. Realiza o disparo do próximo lead da fila ou do lead alvo solicitado
   const nextLead = targetLeadId 
-    ? (pendingLeads.find(l => l.id === targetLeadId) || pendingLeads[0])
+    ? (leads.find(l => l.id === targetLeadId) || pendingLeads.find(l => l.id === targetLeadId) || pendingLeads[0])
     : pendingLeads[0];
 
-  if (!nextLead || nextLead.status !== 'pending' || nextLead.dispatched_at || isBlacklistedPhone(nextLead.phone)) {
+  if (!nextLead) {
+    return {
+      executed: false,
+      message: 'Nenhum lead disponível para disparo no momento.'
+    };
+  }
+
+  if (targetLeadId && force) {
+    // Forçar disparo de teste explicitamente solicitado pelo operador para este lead
+    removePhoneFromBlacklist(nextLead.phone);
+    await clearWhatsAppQueue(nextLead.phone).catch(() => {});
+  } else if (nextLead.status !== 'pending' || nextLead.dispatched_at || isBlacklistedPhone(nextLead.phone)) {
     return {
       executed: false,
       message: 'Lead já foi disparado, não está mais pendente ou foi excluído.'
@@ -1121,10 +1132,10 @@ async function executeAutomationCycleInternal(options: {
       };
     } else {
       nextLead.status = 'pending';
-      nextLead.dispatched_at = null;
+      nextLead.dispatched_at = undefined;
       await updateAutomationLead(nextLead.phone, {
         status: 'pending',
-        dispatched_at: null
+        dispatched_at: undefined
       });
       await addAutomationLog('error', `Falha ao disparar para ${nextLead.company_name}: ${sendResult.error || sendResult.message || 'Erro no WhatsApp Service'}`, nextLead.phone);
       return {

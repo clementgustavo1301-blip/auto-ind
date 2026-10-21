@@ -232,14 +232,15 @@ export async function sendWhatsAppHumanBubbles(
     const bubble = bubbles[i];
     if (i > 0) {
       // Aguarda o celular enviar e liberar a anterior
-      await waitForPhoneQueueIdle(options.phone, 20000);
-      // Pausa humanizada entre a entrega de um balão e a digitação do próximo (1.5s a 2.5s)
-      await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+      await waitForPhoneQueueIdle(options.phone, 30000);
+      // Pausa humanizada entre a entrega de um balão e o próximo (mínimo 5.5s para respeitar a trava do microserviço)
+      await new Promise(r => setTimeout(r, 5500 + Math.random() * 1500));
     }
 
     const res = await sendWhatsAppMessage({
       ...options,
       message: bubble,
+      is_reply: i > 0 ? true : options.is_reply,
       skip_interval_check: true
     });
 

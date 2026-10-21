@@ -1169,10 +1169,12 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 				itDigits := digitsOnly(it.Phone)
 				isSame := (itDigits != "" && targetDigits != "") &&
 					(itDigits == targetDigits || (len(itDigits) >= 8 && len(targetDigits) >= 8 && itDigits[len(itDigits)-8:] == targetDigits[len(targetDigits)-8:]))
-				if isSame && (it.Status == "queued" || it.Status == "typing") {
-					it.Status = "failed"
-					it.Error = "Cancelado manualmente / limpeza de fila"
-					cancelledCount++
+				if isSame {
+					if it.Status == "queued" || it.Status == "typing" {
+						it.Status = "failed"
+						it.Error = "Cancelado manualmente / limpeza de fila"
+						cancelledCount++
+					}
 					continue
 				}
 				filtered = append(filtered, it)
