@@ -388,6 +388,7 @@ export async function addLeadsToAutomation(
     };
 
     existingPhones.add(normPhone);
+    removePhoneFromBlacklist(normPhone);
     newLeads.push(lead);
   }
 
@@ -1119,6 +1120,12 @@ async function executeAutomationCycleInternal(options: {
         leadDispatched: { ...nextLead, status: 'sent', dispatched_at: nowIso }
       };
     } else {
+      nextLead.status = 'pending';
+      nextLead.dispatched_at = null;
+      await updateAutomationLead(nextLead.phone, {
+        status: 'pending',
+        dispatched_at: null
+      });
       await addAutomationLog('error', `Falha ao disparar para ${nextLead.company_name}: ${sendResult.error || sendResult.message || 'Erro no WhatsApp Service'}`, nextLead.phone);
       return {
         executed: false,
