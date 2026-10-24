@@ -1,0 +1,19 @@
+{
+  "name": "LeadCore // Piloto Automático & IA SDR",
+  "short_name": "LeadCore IA",
+  "description": "Automação de prospecção B2B, IA SDR e alertas de Leads Qualificados em tempo real.",
+  "start_url": "/?tab=automation",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -252,6 +252,37 @@ class NeoBrutalistSoundEngine {
     sub.start(now + 0.02);
     sub.stop(now + 0.42);
   }
+
+  /**
+   * Alerta sonoro de alta prioridade para Lead Qualificado (Acorde Ascendente Industrial)
+   */
+  public playQualifiedLeadAlert(): void {
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    const sequence = [659.25, 830.61, 987.77, 1318.51]; // E5 -> G#5 -> B5 -> E6
+
+    sequence.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      const start = now + idx * 0.085;
+      const duration = idx === sequence.length - 1 ? 0.38 : 0.14;
+
+      osc.type = idx === sequence.length - 1 ? 'triangle' : 'square';
+      osc.frequency.setValueAtTime(freq, start);
+
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.linearRampToValueAtTime(0.22, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + duration + 0.02);
+    });
+  }
 }
 
 export const soundEngine = new NeoBrutalistSoundEngine();

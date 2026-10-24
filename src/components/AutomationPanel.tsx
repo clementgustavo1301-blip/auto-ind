@@ -116,9 +116,10 @@ export const COPYWRITING_PRESETS: CopywritingPreset[] = [
 
 interface AutomationPanelProps {
   initialLeads?: (Lead | IndustrialLead)[];
+  focusQualifiedPhone?: string | null;
 }
 
-export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
+export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: AutomationPanelProps) {
   const [settings, setSettings] = useState<AutomationSettings | null>(null);
   const [metrics, setMetrics] = useState<AutomationMetrics | null>(null);
   const [leads, setLeads] = useState<AutomationLead[]>([]);
@@ -221,6 +222,9 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
           }
         }
         setCurrentlyTyping(data.currently_typing || null);
+        if (Array.isArray(data.qualified_alerts) && data.qualified_alerts.length > 0 && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('leadcore:qualified-alerts', { detail: data.qualified_alerts }));
+        }
         if (!isSettingsOpen && data.settings) {
           setEditSettings(data.settings);
         }
@@ -255,6 +259,19 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
     }, 6000);
     return () => clearInterval(interval);
   }, [fetchStatus, fetchAntiBanConfig]);
+
+  // Foca automaticamente no lead qualificado quando o usuário clica na notificação / pop-up
+  const lastFocusedPhoneRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusQualifiedPhone || leads.length === 0) return;
+    if (lastFocusedPhoneRef.current === focusQualifiedPhone) return;
+    lastFocusedPhoneRef.current = focusQualifiedPhone;
+    setActiveKanbanTab('qualified');
+    const matched = leads.find(l => isSamePhone(l.phone, focusQualifiedPhone));
+    if (matched) {
+      setSelectedLeadForChat(matched);
+    }
+  }, [focusQualifiedPhone, leads]);
 
   // Carrega mensagens do lead selecionado para o chat
   const fetchLeadMessages = useCallback(async (phone: string) => {
@@ -946,6 +963,20 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
           >
             <Zap className={`w-3.5 h-3.5 text-[#E5FF00] ${isCycling ? 'animate-spin' : ''}`} />
             <span>{isCycling ? 'Executando...' : 'Rodar Ciclo Agora'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('leadcore:test-qualified-popup'));
+              }
+            }}
+            className="px-3.5 py-2.5 bg-[#25D366]/20 hover:bg-[#25D366] text-[#25D366] hover:text-zinc-950 border-2 border-[#25D366] font-mono text-xs font-black uppercase tracking-wide flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Disparar um Pop-up e Notificação Push de teste no seu celular"
+          >
+            <Flame className="w-3.5 h-3.5" />
+            <span>Testar Pop-up</span>
           </button>
 
           <button

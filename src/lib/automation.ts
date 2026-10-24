@@ -442,7 +442,7 @@ export async function getAutomationLogs(limit = 40): Promise<AutomationLog[]> {
 
       if (!error && data && data.length > 0) {
         return (data as AutomationLog[])
-          .filter(l => l.lead_phone !== '__wa_endpoint__' && l.lead_phone !== '__settings_json__')
+          .filter(l => !l.lead_phone?.startsWith('__'))
           .slice(0, limit);
       }
     } catch (e) {
@@ -450,7 +450,7 @@ export async function getAutomationLogs(limit = 40): Promise<AutomationLog[]> {
     }
   }
   return inMemoryLogs
-    .filter(l => l.lead_phone !== '__wa_endpoint__' && l.lead_phone !== '__settings_json__')
+    .filter(l => !l.lead_phone?.startsWith('__'))
     .slice(0, limit);
 }
 

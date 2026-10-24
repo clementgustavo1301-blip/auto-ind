@@ -18,6 +18,7 @@ import { sendWhatsAppMessage, sendWhatsAppHumanBubbles, getWhatsAppInbound, clea
 import { toDialablePhone, isSamePhone, cleanPhoneDigits, isWhatsAppGroup } from './phone';
 import { isBlacklistedPhone } from './phoneBlacklist';
 import { supabase } from './supabase';
+import { notifyLeadQualified } from './pushNotifications';
 
 interface AIQualificationResult {
   replyMessage: string;
@@ -521,6 +522,14 @@ export async function processIncomingWhatsAppMessage(
         last_reply_at: nowIso
       });
 
+      await notifyLeadQualified(
+        {
+          ...currentLead,
+          qualification_notes: `Lead confirmou interesse ("${trimmedText.slice(0, 60)}") e aguarda seu contato!`
+        },
+        `Lead confirmou ("${trimmedText.slice(0, 60)}") e está pronto para você assumir!`
+      ).catch(() => {});
+
       try {
         const sendRes = await sendWhatsAppHumanBubbles(
           {
@@ -569,6 +578,17 @@ export async function processIncomingWhatsAppMessage(
     `💬 Resposta recebida de ${currentLead.company_name} (${targetPhone}): "${trimmedText.slice(0, 80)}". Status: [${leadStatusTag}]`,
     targetPhone
   );
+
+  // 🔔 Se o lead acabou de ser QUALIFICADO (pronto para humano assumir), dispara notificação Push + Pop-up no celular
+  if (updatedStatus === 'qualified' || analysis.interestLevel === 'high') {
+    await notifyLeadQualified(
+      {
+        ...currentLead,
+        qualification_notes: analysis.notes || `Respondeu: "${trimmedText.slice(0, 70)}"`
+      },
+      `${analysis.notes || 'Lead qualificado pela IA!'} — Última msg: "${trimmedText.slice(0, 60)}"`
+    ).catch(() => {});
+  }
 
   // 🛡️ Se o status for desqualificado, verifica se já enviou mensagem de despedida/encerramento anteriormente
   if (updatedStatus === 'disqualified') {

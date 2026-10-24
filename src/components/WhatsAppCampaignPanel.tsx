@@ -80,6 +80,8 @@ function OdometerCounter({ value }: { value: number }) {
 interface WhatsAppCampaignPanelProps {
   initialLeads?: (Lead | IndustrialLead)[];
   onBackToSearch?: () => void;
+  initialSubTab?: 'campaign' | 'automation';
+  focusQualifiedPhone?: string | null;
 }
 
 type LeadStatus = 'idle' | 'queued' | 'typing' | 'sent' | 'failed' | 'limit_reached';
@@ -94,7 +96,12 @@ interface CampaignLeadItem {
   error?: string;
 }
 
-export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: WhatsAppCampaignPanelProps) {
+export function WhatsAppCampaignPanel({
+  initialLeads = [],
+  onBackToSearch,
+  initialSubTab,
+  focusQualifiedPhone
+}: WhatsAppCampaignPanelProps) {
   // 1. Estado da Lista de Leads
   const [leadItems, setLeadItems] = useState<CampaignLeadItem[]>(() => {
     return initialLeads
@@ -114,7 +121,19 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
 
   const [leadSearch, setLeadSearch] = useState('');
   const [mobileSection, setMobileSection] = useState<'queue' | 'compose' | 'preview'>('queue');
-  const [activeSubTab, setActiveSubTab] = useState<'campaign' | 'automation'>('campaign');
+  const [activeSubTab, setActiveSubTab] = useState<'campaign' | 'automation'>(initialSubTab || 'campaign');
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
+
+  useEffect(() => {
+    if (focusQualifiedPhone) {
+      setActiveSubTab('automation');
+    }
+  }, [focusQualifiedPhone]);
   const [isEnqueuingAutomation, setIsEnqueuingAutomation] = useState(false);
   const [automationEnqueueSuccess, setAutomationEnqueueSuccess] = useState<string | null>(null);
 
@@ -1474,7 +1493,7 @@ export function WhatsAppCampaignPanel({ initialLeads = [], onBackToSearch }: Wha
       </div>
 
       {activeSubTab === 'automation' ? (
-        <AutomationPanel initialLeads={initialLeads} />
+        <AutomationPanel initialLeads={initialLeads} focusQualifiedPhone={focusQualifiedPhone} />
       ) : (
         <>
           {/* BANNER DE DIGITAÇÃO EM TEMPO REAL */}

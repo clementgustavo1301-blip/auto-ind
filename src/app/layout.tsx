@@ -23,6 +23,16 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "LeadCore // Extração B2B & Automação WhatsApp",
   description: "Automação de prospecção hiper-direcionada, extração B2B e disparos de WhatsApp com proteção anti-ban.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "LeadCore IA",
+  },
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({

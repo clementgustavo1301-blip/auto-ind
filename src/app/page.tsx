@@ -11,6 +11,7 @@ import { ExportIndustrialPDF } from '@/components/ExportIndustrialPDF';
 import { Lead, IndustrialLead } from '@/types';
 import { AlertTriangle, Layers, Coins, Building2, Globe, MessageSquare, CheckCircle2, LogOut, Bot } from 'lucide-react';
 import { WhatsAppCampaignPanel } from '@/components/WhatsAppCampaignPanel';
+import { QualifiedLeadNotifier } from '@/components/QualifiedLeadNotifier';
 import { supabase } from '@/lib/supabase';
 import { getOperatorSession, signOutOperator } from '@/lib/auth';
 
@@ -55,6 +56,8 @@ export default function Home() {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [operatorEmail, setOperatorEmail] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'local' | 'industries' | 'whatsapp'>('local');
+  const [whatsappSubTab, setWhatsappSubTab] = useState<'campaign' | 'automation' | undefined>(undefined);
+  const [focusQualifiedPhone, setFocusQualifiedPhone] = useState<string | null>(null);
   
   const [leads, setLeads] = useState<Lead[]>([]);
   const [industrialLeads, setIndustrialLeads] = useState<IndustrialLead[]>([]);
@@ -109,6 +112,27 @@ export default function Home() {
       authListener?.data.subscription.unsubscribe();
     };
   }, [router]);
+
+  // Verifica se o app foi aberto pelo toque na notificação Push do celular (?tab=automation&qualifiedPhone=...)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    const qPhone = params.get('qualifiedPhone');
+    if (tabParam === 'automation' || qPhone) {
+      setActiveTab('whatsapp');
+      setWhatsappSubTab('automation');
+      if (qPhone) {
+        setFocusQualifiedPhone(qPhone);
+      }
+    }
+  }, []);
+
+  const handleOpenQualifiedLead = (phone: string) => {
+    setActiveTab('whatsapp');
+    setWhatsappSubTab('automation');
+    setFocusQualifiedPhone(phone);
+  };
 
   const handleLogout = async () => {
     await signOutOperator();
@@ -248,6 +272,7 @@ export default function Home() {
     <div className="min-h-screen bg-white text-zinc-950 font-sans selection:bg-[#E5FF00] selection:text-black overflow-x-hidden">
       {/* Pura brutalidade: linha grossa no topo */}
       <div className="h-3 md:h-4 w-full bg-zinc-950" />
+      <QualifiedLeadNotifier onOpenLeadInAutomation={handleOpenQualifiedLead} />
       
       <main className="max-w-7xl mx-auto px-3.5 sm:px-6 md:px-12 pt-5 pb-28 md:py-20 flex flex-col gap-7 sm:gap-10 md:gap-16">
         {/* Header - Brutalist Typographic (Adaptado para Mobile) */}
@@ -346,7 +371,9 @@ export default function Home() {
         {activeTab === 'whatsapp' ? (
           <WhatsAppCampaignPanel 
             initialLeads={leadsWithWhatsApp} 
-            onBackToSearch={() => setActiveTab('local')} 
+            onBackToSearch={() => setActiveTab('local')}
+            initialSubTab={whatsappSubTab}
+            focusQualifiedPhone={focusQualifiedPhone}
           />
         ) : (
           <>

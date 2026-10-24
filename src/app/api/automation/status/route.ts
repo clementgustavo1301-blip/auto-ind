@@ -12,6 +12,7 @@ import {
 import { getWhatsAppQueue, getWhatsAppStatus, setDetectedAppOrigin } from '@/lib/whatsapp';
 import { isSamePhone } from '@/lib/phone';
 import { syncInboundWhatsAppMessages } from '@/lib/aiSdr';
+import { getRecentQualifiedAlerts } from '@/lib/pushNotifications';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,13 +24,14 @@ export async function GET(request: Request) {
     ensureAutomationWorkerRunning();
     await syncInboundWhatsAppMessages().catch(() => 0);
 
-    const [settings, metrics, leads, logs, waQueue, waStatus] = await Promise.all([
+    const [settings, metrics, leads, logs, waQueue, waStatus, qualifiedAlerts] = await Promise.all([
       getAutomationSettings(),
       getAutomationMetrics(),
       getAutomationLeads(),
       getAutomationLogs(40),
       getWhatsAppQueue().catch(() => []),
-      getWhatsAppStatus().catch(() => null)
+      getWhatsAppStatus().catch(() => null),
+      getRecentQualifiedAlerts().catch(() => [])
     ]);
 
     // Se o microserviço Go estiver digitando ativamente para alguém na fila, sincroniza com o estado global
@@ -56,7 +58,8 @@ export async function GET(request: Request) {
       next_schedule: nextSchedule,
       currently_typing: currentlyTyping,
       whatsapp_queue: waQueue || [],
-      whatsapp_status: waStatus
+      whatsapp_status: waStatus,
+      qualified_alerts: qualifiedAlerts || []
     }, {
       headers: { 'Cache-Control': 'no-store' }
     });
