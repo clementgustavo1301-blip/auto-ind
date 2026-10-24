@@ -53,10 +53,10 @@ if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "arm64" ]; then
 fi
 chmod +x whatsapp-service-linux-* 2>/dev/null || true
 
-# 6. Inicia motor e túnel juntos no PM2
+# 6. Inicia motor e túnel juntos no PM2 usando JSON (evita erro de ES Module)
 echo "⚡ [5/5] Iniciando whatsapp-engine e whatsapp-tunnel no PM2..."
 pm2 delete all 2>/dev/null || true
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.json || pm2 start ecosystem.config.cjs
 pm2 save
 
 # 7. Configura inicialização automática no boot do Android (quando desligar/descarregar)
@@ -66,7 +66,7 @@ cat << 'EOF' > ~/.termux/boot/start-whatsapp.sh
 termux-wake-lock 2>/dev/null || true
 sleep 4
 cd $HOME/whatsapp-service
-pm2 resurrect || pm2 start ecosystem.config.js
+pm2 resurrect || pm2 start ecosystem.config.json
 EOF
 chmod +x ~/.termux/boot/start-whatsapp.sh
 
