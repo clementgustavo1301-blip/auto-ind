@@ -1204,71 +1204,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         </div>
       </div>
 
-      {/* CARD DE CONEXÃO WHATSAPP / QR CODE (EXIBIDO SE DESCONECTADO OU AGUARDANDO ESCANEAMENTO) */}
-      {(!waServiceStatus?.connected || !waServiceStatus?.logged_in) && (
-        <div className="bg-zinc-950 border-4 border-[#E5FF00] p-4 sm:p-5 shadow-[8px_8px_0_0_#18181B] font-mono text-xs text-zinc-200">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-5">
-            <div className="flex-1 space-y-2.5 text-center md:text-left">
-              <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-amber-500/10 border border-amber-500/40 text-amber-300 text-[10px] font-black uppercase">
-                <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
-                <span>WhatsApp Desconectado • Escanear QR Code</span>
-              </div>
-              <h3 className="text-base sm:text-lg font-black uppercase tracking-wide text-zinc-100">
-                Conecte seu WhatsApp para Iniciar os Disparos e Escuta da IA
-              </h3>
-              <p className="text-[11px] text-zinc-400 leading-relaxed max-w-xl">
-                1. Abra o WhatsApp no celular que fará os envios.<br />
-                2. Vá em <strong>Aparelhos Conectados &gt; Conectar um Aparelho</strong>.<br />
-                3. Aponte a câmera para o QR Code ao lado. O sistema conectará automaticamente sem precisar de senha.
-              </p>
-              <div className="pt-2 flex items-center gap-2 flex-wrap justify-center md:justify-start">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const cmd = `curl -sSL https://auto-ind.vercel.app/setup-autostart.sh | bash`;
-                    navigator.clipboard.writeText(cmd);
-                    setCopiedTermuxCmd(true);
-                    setTimeout(() => setCopiedTermuxCmd(false), 4000);
-                  }}
-                  className="px-3.5 py-2 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-black uppercase text-[11px] border border-zinc-950 shadow-[2px_2px_0_0_#fff] cursor-pointer"
-                >
-                  {copiedTermuxCmd ? '✓ Comando Copiado!' : '📋 Copiar Comando Termux (Auto-Start 24/7)'}
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await fetch('/api/whatsapp/disconnect', { method: 'POST' });
-                    fetchQRCode();
-                    fetchStatus();
-                  }}
-                  className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold uppercase text-[11px] border border-zinc-700 cursor-pointer"
-                >
-                  🔄 Gerar Novo QR Code
-                </button>
-              </div>
-            </div>
 
-            {/* Imagem do QR Code ou Carregamento */}
-            <div className="shrink-0 flex flex-col items-center">
-              <div className="p-3 bg-white border-4 border-zinc-950 shadow-[4px_4px_0_0_#E5FF00] flex items-center justify-center min-w-[180px] min-h-[180px]">
-                {qrCodeData?.qr_base64 ? (
-                  <img
-                    src={`data:image/png;base64,${qrCodeData.qr_base64}`}
-                    alt="WhatsApp QR Code"
-                    className="w-44 h-44 sm:w-48 sm:h-48 object-contain"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center gap-2 text-zinc-600 text-center p-4">
-                    <div className="w-8 h-8 border-3 border-zinc-400 border-t-[#E5FF00] rounded-full animate-spin" />
-                    <span className="text-[10px] font-bold uppercase">Gerando QR Code...</span>
-                  </div>
-                )}
-              </div>
-              <span className="text-[10px] text-zinc-500 font-mono mt-1.5">Auto-atualização ativa</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* FEEDBACK DE EXECUÇÃO DO CICLO */}
       <AnimatePresence>

@@ -1724,6 +1724,23 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 	switch evt := rawEvt.(type) {
 	case *events.Connected:
 		log.Println("🟢 [WhatsApp] Conectado com sucesso à rede WhatsApp!")
+	case *events.Disconnected:
+		log.Println("⚠️ [WhatsApp] Conexão socket interrompida. Tentando reconexão automática...")
+		if s.client != nil && s.client.Store != nil && s.client.Store.ID != nil {
+			go func() {
+				time.Sleep(2 * time.Second)
+				if s.client != nil && !s.client.IsConnected() {
+					_ = s.client.Connect()
+				}
+			}()
+		} else {
+			go s.startPairing(true)
+		}
+	case *events.StreamReplaced:
+		log.Println("⚠️ [WhatsApp] Sessão substituída por outra conexão. Resetando e gerando novo QR...")
+		s.clearQR()
+		s.newClient()
+		go s.startPairing(true)
 	case *events.LoggedOut:
 		log.Println("🔴 [WhatsApp] Sessão desconectada/deslogada pelo celular! Resetando e gerando novo QR...")
 		s.clearQR()
@@ -1733,7 +1750,10 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 		log.Printf("🎉 [WhatsApp] Aparelho pareado com sucesso! JID: %s", evt.ID)
 		s.clearQR()
 	case *events.PairError:
-		log.Printf("❌ [WhatsApp] Erro no pareamento: %v", evt.Error)
+		log.Printf("❌ [WhatsApp] Erro no pareamento: %v. Gerando novo QR...", evt.Error)
+		s.clearQR()
+		s.newClient()
+		go s.startPairing(true)
 	case *events.Message:
 		chatStr := evt.Info.Chat.String()
 		senderStr := evt.Info.Sender.String()
@@ -1962,11 +1982,15 @@ func main() {
 		notifyCh:        make(chan struct{}, 100),
 	}
 
-	// 1. Armazenamento 100% em Memória RAM (Zero arquivos de banco de dados em disco)
+	// 1. Armazenamento Seguro da Sessão (Persiste a conexão para não ficar desconectando)
 	dbLog := waLog.Stdout("Store", "WARN", true)
-	container, err := sqlstore.New(ctx, "sqlite", "file:memdb?mode=memory&cache=shared&_pragma=foreign_keys(1)", dbLog)
+	container, err := sqlstore.New(ctx, "sqlite", "file:whatsapp_session.db?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", dbLog)
 	if err != nil {
-		log.Fatalf("❌ Falha ao inicializar armazenamento em memória: %v", err)
+		log.Printf("⚠️ Não foi possível abrir whatsapp_session.db em disco (%v). Usando memória como fallback...", err)
+		container, err = sqlstore.New(ctx, "sqlite", "file:memdb?mode=memory&cache=shared&_pragma=foreign_keys(1)", dbLog)
+		if err != nil {
+			log.Fatalf("❌ Falha crítica ao inicializar armazenamento: %v", err)
+		}
 	}
 
 	deviceStore, err := container.GetFirstDevice(ctx)

@@ -193,11 +193,26 @@ function analyzeHeuristic(
     };
   }
 
-  // 2. Padrões de Interesse Explícito (Qualifica se disser que quer o serviço, quer saber mais ou pedir proposta)
+  // 2. Padrões de Interesse Explícito (Qualifica se disser que tá interessado, que vai ouvir, que pode chamar Gustavo ou pedir proposta)
   const explicitInterestPatterns = [
-    // Interesse explícito
+    // 1. Declarou que tá interessado
     'tenho interesse', 'temos interesse', 'tenho sim', 'temos sim', 'tenho mto interesse',
-    // Quer saber mais sobre o serviço / entender melhor
+    'estou interessado', 'estou interessada', 'to interessado', 'to interessada', 'interessante',
+    'me interessa', 'interessa', 'tenho interesse sim',
+    
+    // 2. Disse que vai ouvir ou pode falar/mandar
+    'vou ouvir', 'vai ouvir', 'vou escutar', 'pode falar', 'pode mandar', 'pode mandar audio',
+    'pode mandar áudio', 'manda audio', 'manda áudio', 'mande audio', 'mande áudio',
+    'manda que eu escuto', 'manda que eu ouco', 'manda que eu ouço', 'manda ai', 'manda aí',
+    'mande ai', 'mande aí', 'fala ai', 'fala aí', 'pode enviar', 'vou ver', 'pode passar',
+    
+    // 3. Disse que pode chamar Gustavo / pode chamar
+    'pode me chamar gustavo', 'pode chamar o gustavo', 'pode chamar gustavo', 'pode chamar',
+    'chama o gustavo', 'chama gustavo', 'chama ai', 'chama aí', 'me chama', 'me chame',
+    'pode me ligar', 'pode ligar', 'fala comigo', 'fale comigo', 'fala com o gustavo',
+    'chama no whats', 'chama no whatsapp', 'chama no zap',
+    
+    // 4. Quer saber mais sobre o serviço / entender melhor
     'quero saber mais', 'quero entender mais', 'saber mais', 'entender mais',
     'quero saber mais sobre o servico', 'quero saber mais sobre o serviço',
     'como funciona o servico', 'como funciona o serviço', 'como funciona',
@@ -205,15 +220,17 @@ function analyzeHeuristic(
     'o que voces fazem', 'o que vocês fazem', 'quais servicos', 'quais serviços',
     'me explica melhor', 'me passe mais detalhes', 'mais detalhes', 'mais informacoes', 'mais informações',
     'gostaria de saber mais', 'gostaria de entender melhor', 'gostaria de conhecer',
-    // Quer o serviço / contratação
+    
+    // 5. Quer o serviço / contratação
     'quero o servico', 'quero o serviço', 'quero os servicos', 'quero os serviços',
     'quero contratar', 'quero fazer', 'pode fazer', 'vamos fazer', 'vamos fechar',
     'tenho interesse em fazer', 'tenho interesse em contratar', 'preciso do servico', 'preciso do serviço',
-    // Proposta, valores e orçamento
+    
+    // 6. Proposta, valores e orçamento
     'quero proposta', 'quero cotacao', 'quero cotação', 'me manda a tabela', 'manda a tabela',
     'envia a tabela', 'pode mandar a tabela', 'quanto custa', 'qual o valor', 'qual o preco',
-    'qual o preço', 'gostaria de uma cotacao', 'gostaria de uma cotação', 'pode mandar', 'pode enviar',
-    'solicito orcamento', 'solicito orçamento', 'me liga', 'pode ligar', 'orçamento', 'orcamento'
+    'qual o preço', 'gostaria de uma cotacao', 'gostaria de uma cotação',
+    'solicito orcamento', 'solicito orçamento', 'orçamento', 'orcamento'
   ];
 
   let hasExplicitInterest = false;
@@ -225,20 +242,12 @@ function analyzeHeuristic(
   }
 
   if (hasExplicitInterest) {
-    if (profile === 'sergio') {
-      return {
-        replyMessage: `Perfeito!\n\nNós fornecemos sal industrial direto com entrega programada e laudo técnico.\n\nQual a estimativa de consumo mensal ou tipo de sal (grosso, moído ou refinado) que a ${lead.company_name} mais consome? Nosso consultor já vai formalizar a tabela para vocês.`,
-        interestLevel: 'high',
-        qualificationStatus: 'qualified',
-        notes: `Lead solicitou informações do serviço / declarou interesse: "${incomingText.slice(0, 100)}"`,
-        shouldNotifyHuman: true
-      };
-    }
+    // REGRA EXPLÍCITA DO USUÁRIO: "qualifica o lead e aí ele tem que enviar para a aba de qualificados e NÃO RESPONDE MAIS NADA"
     return {
-      replyMessage: `Perfeito!\n\nNós desenvolvemos sites institucionais de alta conversão, landing pages e estratégias de SEO para o Google e IAs.\n\nVocês já têm um site que gostariam de modernizar ou seria um projeto novo para a ${lead.company_name}? O Gustavo vai preparar uma prévia de proposta personalizada para vocês.`,
+      replyMessage: '', // Não responde mais nada para o lead qualificado!
       interestLevel: 'high',
       qualificationStatus: 'qualified',
-      notes: `Lead solicitou informações do serviço / declarou interesse: "${incomingText.slice(0, 100)}"`,
+      notes: `Lead demonstrou interesse claro / autorizou contato: "${incomingText.slice(0, 100)}"`,
       shouldNotifyHuman: true
     };
   }
@@ -296,20 +305,14 @@ REGRAS DE VERACIDADE E LOCALIZAÇÃO (RIGOR ABSOLUTO - NÃO INVENTE NADA):
 - LOCALIZAÇÃO (MOSSORÓ - RN APENAS SE PERGUNTAREM): Você/Gustavo é de Mossoró - RN (e atende empresas de todo o Brasil). Porém, você SÓ deve falar que é de Mossoró - RN SE o lead perguntar explicitamente de onde você é, qual sua cidade ou onde fica a empresa. Se o lead NÃO perguntar de onde você é, NUNCA mencione Mossoró por conta própria.
 
 REGRAS OBRIGATÓRIAS E RESTRITAS DE STATUS (SIGA COM RIGOR ABSOLUTO):
-1. "qualified": Atribua "qualified" (e interestLevel "high") e defina "shouldNotifyHuman": true IMEDIATAMENTE se o lead:
-   - Disse que QUER O SERVIÇO ou quer contratar (ex: "quero o serviço", "quero contratar", "quero fazer", "pode fazer", "vamos fechar", "tenho interesse em fazer").
-   - OU disse que QUER SABER MAIS SOBRE O SERVIÇO / entender melhor (ex: "quero saber mais", "como funciona o serviço?", "me explica melhor", "quais os serviços?", "o que vocês fazem?").
-   - OU pediu valores/proposta/tabela (ex: "quanto custa?", "qual o valor?", "me manda a tabela/orçamento").
-   - OU declarou expressamente que tem interesse (ex: "tenho interesse", "temos interesse", "tenho sim").
-   Sua resposta deve ser animadora, cordial e avisar que o Gustavo entrará em contato para alinhar os detalhes e proposta personalizada.
+1. "qualified": Atribua "qualified" (interestLevel "high", "shouldNotifyHuman": true e "replyMessage": "") IMEDIATAMENTE se o lead:
+   - Disser que ESTÁ INTERESSADO (ex: "tenho interesse", "estou interessado", "to interessado", "tenho sim", "interessante").
+   - OU disser que VAI OUVIR ou pode mandar/falar (ex: "vou ouvir", "pode falar", "manda aí", "pode mandar áudio", "pode mandar", "fala aí", "vou escutar").
+   - OU disser que PODE CHAMAR GUSTAVO ou pode falar com ele (ex: "pode me chamar Gustavo", "pode chamar o Gustavo", "pode chamar", "chama o Gustavo", "chama aí", "pode me chamar", "chama no zap").
+   - OU disser que QUER O SERVIÇO / quer saber mais / pediu valor ou proposta (ex: "quanto custa?", "qual o valor?", "como funciona?", "quero saber mais").
+   REGRA DE OURO DO SISTEMA: Quando o lead for qualificado, a IA NÃO DEVE RESPONDER MAIS NADA ("replyMessage": ""). O lead é movido para a aba de Qualificados para o Gustavo assumir pessoalmente!
 2. "disqualified": Atribua "disqualified" (e interestLevel "none") se o lead disse que NÃO TEM INTERESSE, que não quer, que já tem fornecedor/site/equipe ou pediu para retirar o número. A resposta da IA deve ser breve, cordial e agradecendo pelo tempo.
 3. "chatting": Para QUALQUER outra resposta (como saudações "olá", "bom dia", "tudo bem?", dúvidas gerais, "quem é?", "é você quem faz?"), o status DEVE ser estritamente "chatting" (interestLevel "medium"). A IA deve conduzir a conversa amigavelmente apresentando os serviços e convidando o lead a conhecer mais.
-4. "handoff": Se no histórico você já avisou que o Gustavo (ou consultor) entrará em contato:
-   - Se o lead agradecer ou confirmar (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo", "show"):
-     Responda apenas com uma cordialidade breve e finalizadora (ex: "Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊").
-     Defina "shouldNotifyHuman": true e "qualificationStatus": "qualified".
-   - Se o lead já agradeceu e já recebeu essa resposta cordial final:
-     NÃO responda mais nada ("replyMessage": "").
 
 DIRETRIZ DE HUMANIZAÇÃO OBRIGATÓRIA (MENSAGENS CURTAS EM BALÕES SEPARADOS):
 - NUNCA envie blocos grandes de texto ou mensagens longas. Mensagens longas parecem robô e diminuem a resposta.
@@ -558,78 +561,19 @@ export async function processIncomingWhatsAppMessage(
   const settings = await getAutomationSettings();
   const history = await getAutomationMessages(targetPhone);
 
-  // 🛡️ REGRA CRÍTICA DE HANDOFF GUSTAVO / OPERADOR HUMANO:
-  // "depois que a ia disser que gustavo vai entrar em contato, se a pessoa agradecer ai ele é cordial e dai em diante ele n responde mais"
-  const previousMessages = history.slice(0, -1);
-  const alreadyPromisedContact = checkAlreadyPromisedContact(previousMessages);
-  const alreadySentCordialClosing = checkAlreadySentCordialClosing(previousMessages);
-
-  if (alreadyPromisedContact) {
-    // Caso 1: O lead já havia agradecido e a IA já enviou a resposta cordial de encerramento anteriormente
-    // "e dai em diante ele n responde mais" -> Silêncio total da IA e ativa human_takeover!
-    if (alreadySentCordialClosing) {
-      console.log(`[AI SDR Handoff] Lead ${lead.company_name} já recebeu encerramento cordial. IA silenciada definitivamente para o Gustavo assumir.`);
-      await updateAutomationLead(targetPhone, {
-        human_takeover: true,
-        last_reply_at: nowIso
-      });
-      await addAutomationLog('reply', `💬 Mensagem recebida de ${lead.company_name}: "${trimmedText.slice(0, 80)}" (Atendimento exclusivo do Gustavo - IA em silêncio)`, targetPhone);
-      return {
-        success: true,
-        replied: false,
-        lead: { ...currentLead, human_takeover: true, last_reply_at: nowIso }
-      };
-    }
-
-    // Caso 2: O lead está agradecendo ou confirmando (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo")
-    // "se a pessoa agradecer ai ele é cordial e dai em diante ele n responde mais"
-    if (isThankYouOrPoliteClosing(trimmedText)) {
-      const isSergio = settings.profile === 'sergio';
-      const cordialReply = isSergio
-        ? 'Por nada! Em breve nosso consultor comercial fala com você. Tenha um excelente dia! 😊'
-        : 'Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊';
-
-      await updateAutomationLead(targetPhone, {
-        human_takeover: true, // Bloqueia permanentemente respostas futuras da IA para este lead
-        status: 'qualified',
-        interest_level: 'high',
-        qualification_notes: 'Lead agradeceu após confirmação de contato. Atendimento transferido definitivamente para o Gustavo.',
-        last_reply_at: nowIso
-      });
-
-      await notifyLeadQualified(
-        {
-          ...currentLead,
-          qualification_notes: `Lead confirmou interesse ("${trimmedText.slice(0, 60)}") e aguarda seu contato!`
-        },
-        `Lead confirmou ("${trimmedText.slice(0, 60)}") e está pronto para você assumir!`
-      ).catch(() => {});
-
-      try {
-        const sendRes = await sendWhatsAppHumanBubbles(
-          {
-            phone: targetPhone,
-            message: cordialReply,
-            is_reply: true
-          },
-          async (bubbleText, index, total) => {
-            await addAutomationMessage(targetPhone, 'outbound', 'ai', bubbleText);
-            await addAutomationLog('dispatch', `🤝 IA foi cordial [${index + 1}/${total}] e transferiu controle para Gustavo: "${bubbleText}"`, targetPhone);
-          }
-        );
-        if (!sendRes.success && !sendRes.queued) {
-          console.warn('[AI SDR] Falha ao enviar resposta cordial:', sendRes.message);
-        }
-      } catch (err: any) {
-        console.error('[AI SDR] Erro ao enviar resposta cordial de encerramento:', err);
-      }
-
-      return {
-        success: true,
-        replied: true,
-        lead: { ...currentLead, human_takeover: true, status: 'qualified', interest_level: 'high', last_reply_at: nowIso }
-      };
-    }
+  // 0. Se o lead já é qualificado ou está em human_takeover, a IA NÃO responde nada!
+  if (currentLead.status === 'qualified' || currentLead.human_takeover) {
+    console.log(`[AI SDR] Lead ${currentLead.company_name} (${targetPhone}) já está QUALIFICADO. IA em silêncio absoluto para o Gustavo.`);
+    await addAutomationLog(
+      'reply',
+      `💬 Mensagem recebida de ${currentLead.company_name} (${targetPhone}): "${trimmedText.slice(0, 80)}" (Lead qualificado - Atendimento exclusivo do Gustavo)`,
+      targetPhone
+    );
+    return {
+      success: true,
+      replied: false,
+      lead: { ...currentLead, status: 'qualified', human_takeover: true, last_reply_at: nowIso }
+    };
   }
 
   // 1. Tenta qualificação via LLM (se houver chave de IA), senão usa Heurística especializada
@@ -638,7 +582,48 @@ export async function processIncomingWhatsAppMessage(
     analysis = analyzeHeuristic(currentLead, trimmedText, history, (settings.profile || 'gustavo') as any);
   }
 
-  // 2. Atualiza os dados do lead no banco para "chatting", "qualified" ou "disqualified"
+  // 2. Se o lead foi QUALIFICADO (declarou interesse, vai ouvir ou pode chamar Gustavo):
+  // REGRA EXPLÍCITA DO USUÁRIO: "qualifica o lead e aí ele tem que enviar para a aba de qualificados e NÃO RESPONDE MAIS NADA"
+  const isNowQualified = analysis.qualificationStatus === 'qualified' || analysis.interestLevel === 'high';
+  if (isNowQualified) {
+    await updateAutomationLead(targetPhone, {
+      status: 'qualified',
+      interest_level: 'high',
+      human_takeover: true,
+      qualification_notes: analysis.notes || `Qualificado: "${trimmedText.slice(0, 100)}"`,
+      last_reply_at: nowIso
+    });
+
+    await notifyLeadQualified(
+      {
+        ...currentLead,
+        status: 'qualified',
+        qualification_notes: analysis.notes || `Respondeu com interesse: "${trimmedText.slice(0, 70)}"`
+      },
+      `🔥 Lead Qualificado! "${trimmedText.slice(0, 60)}" — Pronto para o Gustavo assumir!`
+    ).catch(() => {});
+
+    await addAutomationLog(
+      'qualified',
+      `🔥 Lead ${currentLead.company_name} (${targetPhone}) QUALIFICADO! Movido para aba de Qualificados. IA em silêncio absoluto para o Gustavo assumir. Mensagem do lead: "${trimmedText}"`,
+      targetPhone
+    );
+
+    return {
+      success: true,
+      replied: false,
+      lead: {
+        ...currentLead,
+        status: 'qualified',
+        interest_level: 'high',
+        human_takeover: true,
+        last_reply_at: nowIso
+      },
+      qualification: analysis
+    };
+  }
+
+  // 3. Atualiza os dados do lead no banco para "chatting" ou "disqualified"
   const updatedStatus = analysis.qualificationStatus || 'chatting';
   await updateAutomationLead(targetPhone, {
     status: updatedStatus,
@@ -647,23 +632,11 @@ export async function processIncomingWhatsAppMessage(
     last_reply_at: nowIso
   });
 
-  const leadStatusTag = analysis.interestLevel === 'high' ? '🔥 QUALIFICADO' : updatedStatus.toUpperCase();
   await addAutomationLog(
-    analysis.interestLevel === 'high' ? 'qualified' : 'reply',
-    `💬 Resposta recebida de ${currentLead.company_name} (${targetPhone}): "${trimmedText.slice(0, 80)}". Status: [${leadStatusTag}]`,
+    'reply',
+    `💬 Resposta recebida de ${currentLead.company_name} (${targetPhone}): "${trimmedText.slice(0, 80)}". Status: [${updatedStatus.toUpperCase()}]`,
     targetPhone
   );
-
-  // 🔔 Se o lead acabou de ser QUALIFICADO (pronto para humano assumir), dispara notificação Push + Pop-up no celular
-  if (updatedStatus === 'qualified' || analysis.interestLevel === 'high') {
-    await notifyLeadQualified(
-      {
-        ...currentLead,
-        qualification_notes: analysis.notes || `Respondeu: "${trimmedText.slice(0, 70)}"`
-      },
-      `${analysis.notes || 'Lead qualificado pela IA!'} — Última msg: "${trimmedText.slice(0, 60)}"`
-    ).catch(() => {});
-  }
 
   // 🛡️ Se o status for desqualificado, verifica se já enviou mensagem de despedida/encerramento anteriormente
   if (updatedStatus === 'disqualified') {
