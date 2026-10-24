@@ -18,7 +18,7 @@ import {
   removePhoneFromBlacklist, 
   getBlacklistedPhones 
 } from './phoneBlacklist';
-import { sendWhatsAppMessage, sendWhatsAppHumanBubbles, getWhatsAppQueue, clearWhatsAppQueue } from './whatsapp';
+import { sendWhatsAppMessage, sendWhatsAppHumanBubbles, getWhatsAppQueue, clearWhatsAppQueue, updateWhatsAppConfig } from './whatsapp';
 import { interpolateVariables } from './templateInterpolation';
 
 export { 
@@ -52,8 +52,10 @@ Nossos serviços principais:
 3. Sistemas Web e Plataformas sob Medida (painéis administrativos, portais, automações e softwares que eliminam planilhas e processos manuais).
 4. Branding e Identidade Visual Completa (logotipos, manuais de marca e identidade corporativa de alto padrão).
 
-Diretrizes de Comunicação:
+Diretrizes de Comunicação Obrigatórias:
 - Seja cordial, objetivo e conciso (máximo 2 a 3 frases por resposta).
+- REGRA DE LOCALIZAÇÃO (MOSSORÓ - RN APENAS SE PERGUNTAREM): O Gustavo é de Mossoró - RN (e atende empresas de todo o Brasil online). Porém, você SÓ deve falar que é de Mossoró - RN SE o cliente perguntar de onde você/Gustavo é, qual a sua cidade ou onde fica a empresa. Nunca fale a cidade se não perguntarem.
+- REGRA DE VERACIDADE ABSOLUTA (PROIBIDO INVENTAR QUALQUER COISA): NUNCA invente nada! Não invente preços, valores, prazos, nomes de clientes, cases fictícios, endereços ou condições comerciais. Se o lead perguntar algo específico (como valores, prazos ou detalhes técnicos) que não está aqui, diga com transparência que o Gustavo vai passar essa informação exata em seguida.
 - Entenda a necessidade da empresa (se o site atual está desatualizado, se precisam de mais clientes ou se buscam um sistema para automatizar operações).
 - Quando o lead demonstrar interesse ou pedir orçamento/demonstração de portfólio, classifique-o como qualificado (interesse alto) e avise que o Gustavo entrará em contato para apresentar uma análise gratuita e proposta personalizada.
 - REGRA DE HANDOFF E TRANSIÇÃO DEFINITIVA:
@@ -88,7 +90,7 @@ Diretrizes de Comunicação:
     name: 'Sérgio // LeadCore Sal Industrial',
     tagline: 'Distribuição B2B de Sal Grosso, Moído, Refinado e Micronizado para Indústrias',
     initial_message_template: 'Olá, tudo bem? Notei que a {empresa} atua no setor de {segmento} em {cidade}. Vocês utilizam sal industrial no processo produtivo ou tratamento?',
-    ai_prompt: 'Você é o especialista comercial da LeadCore Sal Industrial (empresa do Sérgio). Seu objetivo é descobrir de forma amigável e profissional se a empresa utiliza sal industrial (grosso, moído, refinado ou micronizado), qual a estimativa de consumo mensal e se tem interesse em receber uma cotação direta da distribuidora. Seja conciso (máximo 2 a 3 frases por mensagem). Quando o cliente demonstrar interesse ou pedir preços, agradeça e avise que nosso consultor comercial entrará em contato com a tabela personalizada. Se o cliente agradecer ou confirmar após o aviso de contato, responda apenas cordialmente (ex: "Por nada! Em breve nosso consultor comercial fala com você. Tenha um excelente dia! 😊") e encerre a atuação da IA para este contato.',
+    ai_prompt: 'Você é o especialista comercial da LeadCore Sal Industrial (empresa do Sérgio). Seu objetivo é descobrir de forma amigável e profissional se a empresa utiliza sal industrial (grosso, moído, refinado ou micronizado), qual a estimativa de consumo mensal e se tem interesse em receber uma cotação direta da distribuidora. REGRA DE LOCALIZAÇÃO: Somos de Mossoró - RN (polo salineiro), mas você SÓ deve mencionar que somos de Mossoró - RN SE o cliente perguntar de onde somos ou onde fica a empresa. REGRA DE VERACIDADE: NUNCA invente nada (não invente preços, fretes, prazos ou condições que não foram informados). Seja conciso (máximo 2 a 3 frases por mensagem). Quando o cliente demonstrar interesse ou pedir preços, agradeça e avise que nosso consultor comercial entrará em contato com a tabela personalizada. Se o cliente agradecer ou confirmar após o aviso de contato, responda apenas cordialmente (ex: "Por nada! Em breve nosso consultor comercial fala com você. Tenha um excelente dia! 😊") e encerre a atuação da IA para este contato.',
     target_segments: [
       'Tratamento de Água',
       'Laticínios',
@@ -126,10 +128,14 @@ export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   excluded_phones: []
 };
 
-// Fallback em memória para execução contínua caso as tabelas ainda estejam sendo criadas no Supabase
-let inMemorySettings: AutomationSettings = { ...DEFAULT_AUTOMATION_SETTINGS };
-let inMemoryLeads: AutomationLead[] = [];
-let inMemoryLogs: AutomationLog[] = [
+const gState = globalThis as any;
+
+// Fallback em memória global (compartilhado entre todas as rotas do servidor Next.js)
+let inMemorySettings: AutomationSettings = gState.__inMemorySettings || { ...DEFAULT_AUTOMATION_SETTINGS };
+gState.__inMemorySettings = inMemorySettings;
+let inMemoryLeads: AutomationLead[] = gState.__inMemoryLeads || [];
+gState.__inMemoryLeads = inMemoryLeads;
+let inMemoryLogs: AutomationLog[] = gState.__inMemoryLogs || [
   {
     id: 'log-init',
     event_type: 'system',
@@ -137,67 +143,233 @@ let inMemoryLogs: AutomationLog[] = [
     created_at: new Date().toISOString()
   }
 ];
-let inMemoryMessages: AutomationMessage[] = [];
+gState.__inMemoryLogs = inMemoryLogs;
+let inMemoryMessages: AutomationMessage[] = gState.__inMemoryMessages || [];
+gState.__inMemoryMessages = inMemoryMessages;
+
+function sanitizeSettingsObject(raw: Partial<AutomationSettings>): AutomationSettings {
+  const base = gState.__inMemorySettings || DEFAULT_AUTOMATION_SETTINGS;
+  const merged: AutomationSettings = {
+    ...DEFAULT_AUTOMATION_SETTINGS,
+    ...base,
+    ...raw,
+    daily_limit: Number(raw.daily_limit ?? base.daily_limit ?? DEFAULT_AUTOMATION_SETTINGS.daily_limit) || 10,
+    min_interval_mins: Number(raw.min_interval_mins ?? base.min_interval_mins ?? DEFAULT_AUTOMATION_SETTINGS.min_interval_mins) || 15,
+    max_interval_mins: Number(raw.max_interval_mins ?? base.max_interval_mins ?? DEFAULT_AUTOMATION_SETTINGS.max_interval_mins) || 35,
+    start_hour: (raw.start_hour ?? base.start_hour ?? DEFAULT_AUTOMATION_SETTINGS.start_hour).trim() || '09:00',
+    end_hour: (raw.end_hour ?? base.end_hour ?? DEFAULT_AUTOMATION_SETTINGS.end_hour).trim() || '17:30',
+    work_days_only: Boolean(raw.work_days_only ?? base.work_days_only ?? false),
+    is_active: Boolean(raw.is_active ?? base.is_active ?? false),
+    profile: (raw.profile || base.profile || 'gustavo') as any,
+    target_segments: Array.isArray(raw.target_segments) && raw.target_segments.length > 0
+      ? raw.target_segments
+      : (Array.isArray(base.target_segments) && base.target_segments.length > 0 ? base.target_segments : DEFAULT_AUTOMATION_SETTINGS.target_segments),
+    target_cities: Array.isArray(raw.target_cities) && raw.target_cities.length > 0
+      ? raw.target_cities
+      : (Array.isArray(base.target_cities) && base.target_cities.length > 0 ? base.target_cities : DEFAULT_AUTOMATION_SETTINGS.target_cities),
+    initial_message_template: raw.initial_message_template ?? base.initial_message_template ?? DEFAULT_AUTOMATION_SETTINGS.initial_message_template,
+    ai_provider: (raw.ai_provider || base.ai_provider || 'gemini') as any,
+    ai_api_key: raw.ai_api_key ?? base.ai_api_key ?? process.env.GEMINI_API_KEY ?? '',
+    ai_model: raw.ai_model || base.ai_model || 'gemini-3.5-flash-lite',
+    ai_prompt: raw.ai_prompt ?? base.ai_prompt ?? DEFAULT_AUTOMATION_SETTINGS.ai_prompt,
+    excluded_phones: Array.isArray(raw.excluded_phones)
+      ? raw.excluded_phones
+      : (Array.isArray(base.excluded_phones) ? base.excluded_phones : [])
+  };
+  return merged;
+}
 
 /**
- * Obtém as configurações da automação
+ * Obtém as configurações da automação (com proteção contra sobrescrita e fallback JSON no Supabase)
  */
 export async function getAutomationSettings(): Promise<AutomationSettings> {
+  // Se acabou de ser salvo há menos de 4 segundos nesta instância, retorna imediatamente a versão recém-salva
+  if (gState.__settingsLastSavedAt && Date.now() - gState.__settingsLastSavedAt < 4000 && gState.__inMemorySettings) {
+    return gState.__inMemorySettings;
+  }
+
   if (supabase) {
     try {
-      const { data, error } = await supabase
-        .from('automation_settings')
-        .select('*')
-        .limit(1)
-        .maybeSingle();
+      const [tableRes, backupRes] = await Promise.all([
+        supabase
+          .from('automation_settings')
+          .select('*')
+          .order('id', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('automation_logs')
+          .select('details, created_at')
+          .eq('lead_phone', '__settings_json__')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      ]);
 
-      if (!error && data) {
-        if (Array.isArray(data.excluded_phones)) {
-          loadBlacklistedPhones(data.excluded_phones);
+      let backupParsed: Partial<AutomationSettings> | null = null;
+      if (!backupRes.error && backupRes.data?.details) {
+        try {
+          backupParsed = JSON.parse(backupRes.data.details);
+        } catch {
+          backupParsed = null;
         }
-        inMemorySettings = {
-          ...DEFAULT_AUTOMATION_SETTINGS,
-          ...data,
-          target_segments: data.target_segments || DEFAULT_AUTOMATION_SETTINGS.target_segments,
-          target_cities: data.target_cities || DEFAULT_AUTOMATION_SETTINGS.target_cities,
-          ai_api_key: data.ai_api_key || process.env.GEMINI_API_KEY || '',
-          excluded_phones: Array.isArray(data.excluded_phones) ? data.excluded_phones : []
+      }
+
+      const tableData = (!tableRes.error && tableRes.data) ? tableRes.data : null;
+
+      if (tableData || backupParsed) {
+        // O snapshot JSON (__settings_json__) garante todos os campos mesmo que faltem colunas na tabela automation_settings
+        const combined: Partial<AutomationSettings> = {
+          ...(tableData || {}),
+          ...(backupParsed || {}),
+          id: tableData?.id || backupParsed?.id
         };
+
+        if (Array.isArray(combined.excluded_phones)) {
+          loadBlacklistedPhones(combined.excluded_phones);
+        }
+
+        inMemorySettings = sanitizeSettingsObject(combined);
+        gState.__inMemorySettings = inMemorySettings;
         return inMemorySettings;
       }
     } catch (e) {
       console.warn('[Automation] Fallback para configurações em memória:', e);
     }
   }
+
   if (!inMemorySettings.ai_api_key && process.env.GEMINI_API_KEY) {
     inMemorySettings.ai_api_key = process.env.GEMINI_API_KEY;
   }
+  gState.__inMemorySettings = inMemorySettings;
   return inMemorySettings;
 }
 
 /**
- * Salva as configurações da automação
+ * Salva as configurações da automação de forma 100% resiliente (tabela + snapshot JSON + sincronia com Go)
  */
 export async function saveAutomationSettings(updates: Partial<AutomationSettings>): Promise<AutomationSettings> {
-  inMemorySettings = { ...inMemorySettings, ...updates };
+  inMemorySettings = sanitizeSettingsObject({
+    ...inMemorySettings,
+    ...updates
+  });
+  gState.__inMemorySettings = inMemorySettings;
+  gState.__settingsLastSavedAt = Date.now();
 
   if (supabase) {
     try {
-      const { data: existing } = await supabase.from('automation_settings').select('id').limit(1).maybeSingle();
-      if (existing?.id) {
-        await supabase.from('automation_settings').update({
-          ...inMemorySettings,
-          updated_at: new Date().toISOString()
-        }).eq('id', existing.id);
+      // 1. Salva snapshot JSON completo em automation_logs (nunca falha por falta de coluna)
+      await supabase.from('automation_logs').delete().eq('lead_phone', '__settings_json__');
+      await supabase.from('automation_logs').insert([{
+        event_type: 'system',
+        details: JSON.stringify(inMemorySettings),
+        lead_phone: '__settings_json__'
+      }]);
+
+      // 2. Atualiza ou insere na tabela automation_settings (com fallback automático se faltar alguma coluna)
+      const { data: rows } = await supabase
+        .from('automation_settings')
+        .select('id')
+        .order('id', { ascending: true });
+
+      const existingId = rows && rows.length > 0 ? rows[0].id : null;
+
+      // Remove linhas duplicadas antigas se existirem
+      if (rows && rows.length > 1) {
+        const extraIds = rows.slice(1).map(r => r.id);
+        await supabase.from('automation_settings').delete().in('id', extraIds);
+      }
+
+      const fullPayload: Record<string, any> = {
+        is_active: inMemorySettings.is_active,
+        daily_limit: inMemorySettings.daily_limit,
+        start_hour: inMemorySettings.start_hour,
+        end_hour: inMemorySettings.end_hour,
+        work_days_only: inMemorySettings.work_days_only,
+        min_interval_mins: inMemorySettings.min_interval_mins,
+        max_interval_mins: inMemorySettings.max_interval_mins,
+        profile: inMemorySettings.profile,
+        target_segments: inMemorySettings.target_segments,
+        target_cities: inMemorySettings.target_cities,
+        initial_message_template: inMemorySettings.initial_message_template,
+        ai_provider: inMemorySettings.ai_provider,
+        ai_api_key: inMemorySettings.ai_api_key,
+        ai_model: inMemorySettings.ai_model,
+        ai_prompt: inMemorySettings.ai_prompt,
+        excluded_phones: inMemorySettings.excluded_phones,
+        updated_at: new Date().toISOString()
+      };
+
+      const basePayload: Record<string, any> = {
+        is_active: inMemorySettings.is_active,
+        daily_limit: inMemorySettings.daily_limit,
+        start_hour: inMemorySettings.start_hour,
+        end_hour: inMemorySettings.end_hour,
+        work_days_only: inMemorySettings.work_days_only,
+        min_interval_mins: inMemorySettings.min_interval_mins,
+        max_interval_mins: inMemorySettings.max_interval_mins,
+        target_segments: inMemorySettings.target_segments,
+        target_cities: inMemorySettings.target_cities,
+        initial_message_template: inMemorySettings.initial_message_template,
+        ai_provider: inMemorySettings.ai_provider,
+        ai_api_key: inMemorySettings.ai_api_key,
+        ai_model: inMemorySettings.ai_model,
+        ai_prompt: inMemorySettings.ai_prompt
+      };
+
+      if (existingId) {
+        inMemorySettings.id = existingId;
+        const { error: updateErr } = await supabase
+          .from('automation_settings')
+          .update(fullPayload)
+          .eq('id', existingId);
+
+        if (updateErr) {
+          console.warn('[Automation] Retentando update com colunas base:', updateErr.message);
+          await supabase
+            .from('automation_settings')
+            .update(basePayload)
+            .eq('id', existingId);
+        }
       } else {
-        await supabase.from('automation_settings').insert([inMemorySettings]);
+        const { data: inserted, error: insertErr } = await supabase
+          .from('automation_settings')
+          .insert([fullPayload])
+          .select('id')
+          .maybeSingle();
+
+        if (insertErr) {
+          console.warn('[Automation] Retentando insert com colunas base:', insertErr.message);
+          const { data: insertedBase } = await supabase
+            .from('automation_settings')
+            .insert([basePayload])
+            .select('id')
+            .maybeSingle();
+          if (insertedBase?.id) inMemorySettings.id = insertedBase.id;
+        } else if (inserted?.id) {
+          inMemorySettings.id = inserted.id;
+        }
       }
     } catch (e) {
       console.warn('[Automation] Não foi possível salvar configurações no Supabase:', e);
     }
   }
 
-  await addAutomationLog('system', `Configurações da automação atualizadas. Robô ${inMemorySettings.is_active ? 'ATIVO' : 'PAUSADO'}.`);
+  // 3. Sincroniza daily_limit imediatamente com o microserviço Go WhatsApp
+  await updateWhatsAppConfig({ daily_limit: inMemorySettings.daily_limit }).catch(() => false);
+
+  await addAutomationLog(
+    'system',
+    `⚙️ Configurações salvas! Robô ${inMemorySettings.is_active ? 'ATIVO' : 'PAUSADO'} • Meta: ${inMemorySettings.daily_limit}/dia • Horário: ${inMemorySettings.start_hour}-${inMemorySettings.end_hour} • Intervalo: ${inMemorySettings.min_interval_mins}-${inMemorySettings.max_interval_mins}min.`
+  );
+
+  ensureAutomationWorkerRunning();
+  if (inMemorySettings.is_active) {
+    setTimeout(() => {
+      runAutomationCycle(false).catch(() => {});
+    }, 500);
+  }
+
   return inMemorySettings;
 }
 
@@ -266,16 +438,20 @@ export async function getAutomationLogs(limit = 40): Promise<AutomationLog[]> {
         .from('automation_logs')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(limit);
+        .limit(limit + 10);
 
       if (!error && data && data.length > 0) {
-        return data as AutomationLog[];
+        return (data as AutomationLog[])
+          .filter(l => l.lead_phone !== '__wa_endpoint__' && l.lead_phone !== '__settings_json__')
+          .slice(0, limit);
       }
     } catch (e) {
       // Fallback
     }
   }
-  return inMemoryLogs.slice(0, limit);
+  return inMemoryLogs
+    .filter(l => l.lead_phone !== '__wa_endpoint__' && l.lead_phone !== '__settings_json__')
+    .slice(0, limit);
 }
 
 /**
@@ -690,8 +866,87 @@ export async function getAutomationMessages(leadPhone: string): Promise<Automati
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 }
 
+const BRAZIL_TZ = 'America/Sao_Paulo';
+
+export function getBrazilDateParts(date: Date = new Date()): {
+  dateStr: string;
+  timeStr: string;
+  dayOfWeek: number;
+  hour: number;
+  minute: number;
+  second: number;
+} {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BRAZIL_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    weekday: 'short'
+  }).formatToParts(date);
+
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    map[p.type] = p.value;
+  }
+
+  const year = map.year || '2026';
+  const month = map.month || '01';
+  const day = map.day || '01';
+  const rawHour = Number(map.hour || 0);
+  const hour = rawHour === 24 ? 0 : rawHour;
+  const minute = Number(map.minute || 0);
+  const second = Number(map.second || 0);
+
+  const weekdayMap: Record<string, number> = {
+    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6
+  };
+  const dayOfWeek = weekdayMap[map.weekday] ?? date.getDay();
+
+  return {
+    dateStr: `${year}-${month}-${day}`,
+    timeStr: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    dayOfWeek,
+    hour,
+    minute,
+    second
+  };
+}
+
+export function isSameBrazilDay(isoString?: string, targetDateStr?: string): boolean {
+  if (!isoString) return false;
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return false;
+  const refDateStr = targetDateStr || getBrazilDateParts().dateStr;
+  return getBrazilDateParts(d).dateStr === refDateStr;
+}
+
+function getSecondsUntilNextBrazilHour(targetHourStr: string, forceNextDay = false): {
+  diffSec: number;
+  scheduledIso: string;
+} {
+  const now = new Date();
+  const br = getBrazilDateParts(now);
+  const [targetH, targetM] = (targetHourStr || '09:00').split(':').map(Number);
+  const targetTotalSec = (targetH || 9) * 3600 + (targetM || 0) * 60;
+  const currentTotalSec = br.hour * 3600 + br.minute * 60 + br.second;
+
+  let diffSec = targetTotalSec - currentTotalSec;
+  if (forceNextDay || diffSec <= 0) {
+    diffSec += 24 * 3600;
+  }
+  const scheduledDate = new Date(now.getTime() + diffSec * 1000);
+  return {
+    diffSec: Math.max(0, diffSec),
+    scheduledIso: scheduledDate.toISOString()
+  };
+}
+
 /**
- * Calcula a programação exata do próximo disparo automático
+ * Calcula a programação exata do próximo disparo automático (sempre no fuso horário de Brasília)
  */
 export function calculateNextDispatchSchedule(
   settings: AutomationSettings,
@@ -708,8 +963,9 @@ export function calculateNextDispatchSchedule(
   currently_typing: CurrentlyTypingInfo | null;
 } {
   const now = new Date();
-  const currentHour = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
-  const currentDay = now.getDay(); // 0 = Domingo, 6 = Sábado
+  const brNow = getBrazilDateParts(now);
+  const currentHour = brNow.timeStr;
+  const currentDay = brNow.dayOfWeek; // 0 = Domingo, 6 = Sábado
 
   const typing = getCurrentlyTyping();
   const pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
@@ -761,17 +1017,10 @@ export function calculateNextDispatchSchedule(
   const isBeforeStart = currentHour < settings.start_hour;
   const isAfterEnd = currentHour > settings.end_hour;
   if (isBeforeStart || isAfterEnd) {
-    const targetDate = new Date();
-    if (isAfterEnd) {
-      targetDate.setDate(targetDate.getDate() + 1);
-    }
-    const [startH, startM] = settings.start_hour.split(':').map(Number);
-    targetDate.setHours(startH || 9, startM || 0, 0, 0);
-
-    const diffSec = Math.max(0, Math.round((targetDate.getTime() - now.getTime()) / 1000));
+    const { diffSec, scheduledIso } = getSecondsUntilNextBrazilHour(settings.start_hour, isAfterEnd);
     return {
       status: 'outside_hours',
-      scheduled_at: targetDate.toISOString(),
+      scheduled_at: scheduledIso,
       formatted_time: `${settings.start_hour}:00`,
       countdown_seconds: diffSec,
       reason: `Fora do expediente comercial (${settings.start_hour} às ${settings.end_hour}). Próximo início às ${settings.start_hour}.`,
@@ -782,47 +1031,29 @@ export function calculateNextDispatchSchedule(
   }
 
   // 4. Limite Diário Atingido
-  if (metrics.dispatchedToday >= settings.daily_limit) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const [startH, startM] = settings.start_hour.split(':').map(Number);
-    tomorrow.setHours(startH || 9, startM || 0, 0, 0);
-    const diffSec = Math.max(0, Math.round((tomorrow.getTime() - now.getTime()) / 1000));
-
+  const dailyTarget = settings.daily_limit || 10;
+  if (metrics.dispatchedToday >= dailyTarget) {
+    const { diffSec, scheduledIso } = getSecondsUntilNextBrazilHour(settings.start_hour, true);
     return {
       status: 'limit_reached',
-      scheduled_at: tomorrow.toISOString(),
+      scheduled_at: scheduledIso,
       formatted_time: `Amanhã às ${settings.start_hour}`,
       countdown_seconds: diffSec,
-      reason: `Meta diária de ${settings.daily_limit} mensagens atingida hoje. Próximo ciclo amanhã às ${settings.start_hour}.`,
+      reason: `Meta diária de ${dailyTarget} mensagens atingida hoje. Próximo ciclo amanhã às ${settings.start_hour}.`,
       is_window_active: false,
       next_lead: nextLead,
       currently_typing: null
     };
   }
 
-  // 5. Fila Vazia
-  if (pendingLeads.length === 0) {
-    return {
-      status: 'queue_empty',
-      scheduled_at: now.toISOString(),
-      formatted_time: 'Aguardando leads',
-      countdown_seconds: 0,
-      reason: 'Fila de leads vazia. O robô minerará automaticamente novos contatos no Google.',
-      is_window_active: true,
-      next_lead: null,
-      currently_typing: null
-    };
-  }
-
-  // 6. Cálculo do intervalo baseado no último disparo
+  // 5. Cálculo do intervalo anti-ban baseado no último disparo (verificado antes de fila vazia)
   const dispatchedLeads = leads
     .filter(l => Boolean(l.dispatched_at))
     .sort((a, b) => new Date(b.dispatched_at!).getTime() - new Date(a.dispatched_at!).getTime());
 
   const lastDispatched = dispatchedLeads[0];
-  const minIntervalSec = Math.max(1, (settings.min_interval_mins || 25) * 60);
-  const maxIntervalSec = Math.max(minIntervalSec, (settings.max_interval_mins || 50) * 60);
+  const minIntervalSec = Math.max(1, (settings.min_interval_mins || 15) * 60);
+  const maxIntervalSec = Math.max(minIntervalSec, (settings.max_interval_mins || 35) * 60);
   const avgIntervalSec = Math.round((minIntervalSec + maxIntervalSec) / 2);
 
   if (lastDispatched && lastDispatched.dispatched_at) {
@@ -832,7 +1063,13 @@ export function calculateNextDispatchSchedule(
 
     if (remainingSec > 0) {
       const scheduledDate = new Date(nextTimeMs);
-      const timeStr = scheduledDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      const timeStr = scheduledDate.toLocaleTimeString('pt-BR', {
+        timeZone: BRAZIL_TZ,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
       return {
         status: 'active',
         scheduled_at: scheduledDate.toISOString(),
@@ -846,7 +1083,21 @@ export function calculateNextDispatchSchedule(
     }
   }
 
-  // Pronto para disparar imediatamente
+  // 6. Fila Vazia (intervalo já cumprido -> pronto para minerar os 10 leads do dia e disparar)
+  if (pendingLeads.length === 0) {
+    return {
+      status: 'queue_empty',
+      scheduled_at: now.toISOString(),
+      formatted_time: 'Minerando leads...',
+      countdown_seconds: 0,
+      reason: `Fila de leads vazia. O robô minerará automaticamente até ${dailyTarget - metrics.dispatchedToday} leads no Google para disparar.`,
+      is_window_active: true,
+      next_lead: null,
+      currently_typing: null
+    };
+  }
+
+  // 7. Pronto para disparar imediatamente
   return {
     status: 'ready_now',
     scheduled_at: now.toISOString(),
@@ -860,17 +1111,17 @@ export function calculateNextDispatchSchedule(
 }
 
 /**
- * Calcula as métricas consolidadas de hoje (garantindo que respostas sejam contadas com precisão)
+ * Calcula as métricas consolidadas de hoje no fuso de Brasília (garantindo precisão em nuvem/Vercel e local)
  */
 export async function getAutomationMetrics(): Promise<AutomationMetrics> {
   const leads = await getAutomationLeads();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getBrazilDateParts().dateStr;
 
-  const minedToday = leads.filter(l => l.created_at?.startsWith(todayStr)).length;
-  const dispatchedToday = leads.filter(l => l.dispatched_at?.startsWith(todayStr)).length;
+  const minedToday = leads.filter(l => isSameBrazilDay(l.created_at, todayStr)).length;
+  const dispatchedToday = leads.filter(l => isSameBrazilDay(l.dispatched_at, todayStr)).length;
   // Considera resposta se tem data de resposta hoje OU se o status foi alterado para em conversa/qualificado
   const repliesToday = leads.filter(l => {
-    const hasReplyDateToday = l.last_reply_at && l.last_reply_at.startsWith(todayStr);
+    const hasReplyDateToday = isSameBrazilDay(l.last_reply_at, todayStr);
     const hasActiveChat = l.status === 'chatting' || l.status === 'qualified';
     return Boolean(hasReplyDateToday || hasActiveChat);
   }).length;
@@ -905,13 +1156,14 @@ export function formatInitialMessage(template: string, lead: AutomationLead): st
   });
 }
 
-let isCycleRunning = false;
+const gAuto = globalThis as any;
 
 /**
  * Executa um ciclo completo do robô autônomo:
- * 1. Verifica regras de horário e limites.
- * 2. Se a fila de pendentes estiver baixa (< 5), busca automaticamente mais leads via Google SerpAPI.
- * 3. Se estiver no momento de envio, despacha o próximo lead com anti-ban.
+ * 1. Sincroniza mensagens recebidas (inbound) para resposta automática da IA SDR 24/7.
+ * 2. Verifica regras de horário comercial (fuso de Brasília) e meta diária (10 leads/dia).
+ * 3. Se a fila estiver vazia (ou sem leads suficientes para os 10 do dia), minera automaticamente até 10 leads no Google.
+ * 4. Quando o intervalo anti-ban zerar, despacha o próximo lead sem precisar abrir o app.
  */
 export async function runAutomationCycle(options: {
   force?: boolean;
@@ -923,15 +1175,15 @@ export async function runAutomationCycle(options: {
   message: string;
   leadDispatched?: AutomationLead;
 }> {
-  if (isCycleRunning) {
+  if (gAuto.__isAutomationCycleRunning) {
     return { executed: false, message: 'Ciclo de automação já em andamento.' };
   }
-  isCycleRunning = true;
+  gAuto.__isAutomationCycleRunning = true;
   try {
     const result = await executeAutomationCycleInternal(options);
     return result;
   } finally {
-    isCycleRunning = false;
+    gAuto.__isAutomationCycleRunning = false;
   }
 }
 
@@ -949,15 +1201,23 @@ async function executeAutomationCycleInternal(options: {
   const skipSearch = typeof options === 'object' ? Boolean(options?.skipSearch) : false;
   const targetLeadId = typeof options === 'object' ? options?.targetLeadId : undefined;
 
+  // 0. Sincroniza mensagens recebidas no WhatsApp em qualquer invocação (mesmo com app fechado)
+  try {
+    const { syncInboundWhatsAppMessages } = await import('./aiSdr');
+    await syncInboundWhatsAppMessages();
+  } catch {
+    // Continua
+  }
+
   const settings = await getAutomationSettings();
 
   if (!settings.is_active && !force) {
     return { executed: false, message: 'Automação pausada pelo operador.' };
   }
 
-  const now = new Date();
-  const currentHour = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
-  const currentDay = now.getDay(); // 0 = Domingo, 6 = Sábado
+  const brNow = getBrazilDateParts();
+  const currentHour = brNow.timeStr;
+  const currentDay = brNow.dayOfWeek; // 0 = Domingo, 6 = Sábado
 
   // 1. Verificação de dias úteis
   if (settings.work_days_only && (currentDay === 0 || currentDay === 6) && !force) {
@@ -972,13 +1232,14 @@ async function executeAutomationCycleInternal(options: {
     };
   }
 
-  const metrics = await getAutomationMetrics();
+  let metrics = await getAutomationMetrics();
+  const dailyTarget = settings.daily_limit || 10;
 
-  // 3. Verificação de cota diária
-  if (!force && metrics.dispatchedToday >= settings.daily_limit) {
+  // 3. Verificação de cota diária (padrão: 10 disparos por dia)
+  if (!force && metrics.dispatchedToday >= dailyTarget) {
     return { 
       executed: false, 
-      message: `Limite diário atingido (${metrics.dispatchedToday}/${settings.daily_limit} disparos hoje). Próximos disparos amanhã.` 
+      message: `Limite diário atingido (${metrics.dispatchedToday}/${dailyTarget} disparos hoje). Próximos disparos amanhã.` 
     };
   }
 
@@ -986,9 +1247,14 @@ async function executeAutomationCycleInternal(options: {
   let pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
   let searchedCount = 0;
 
-  // 4. Se a fila estiver totalmente vazia e NÃO for solicitado pular busca, dispara a busca automática via Google API
-  if (pendingLeads.length === 0 && !skipSearch) {
+  // 4. Mineração automática para garantir os 10 leads do dia quando a fila estiver vazia
+  const remainingQuotaToday = Math.max(0, dailyTarget - metrics.dispatchedToday);
+  const lastEmptySearchAt = gAuto.__lastEmptySearchTimestamp || 0;
+  const canSearchNow = force || (Date.now() - lastEmptySearchAt >= 60000);
+
+  if (pendingLeads.length === 0 && !skipSearch && !targetLeadId && (remainingQuotaToday > 0 || force) && canSearchNow) {
     try {
+      const targetBatchSize = force && remainingQuotaToday === 0 ? 10 : Math.min(10, Math.max(1, remainingQuotaToday));
       const segments = settings.target_segments.length > 0 
         ? settings.target_segments 
         : DEFAULT_AUTOMATION_SETTINGS.target_segments;
@@ -996,65 +1262,77 @@ async function executeAutomationCycleInternal(options: {
         ? settings.target_cities 
         : DEFAULT_AUTOMATION_SETTINGS.target_cities;
 
-      // Escolhe aleatoriamente um segmento e uma cidade configurada
-      const chosenSegment = segments[Math.floor(Math.random() * segments.length)];
-      const chosenCity = cities[Math.floor(Math.random() * cities.length)];
-
-      await addAutomationLog('search', `🔍 Minerando leads no Google: "${chosenSegment}" em "${chosenCity}"...`);
-
-      const serpResult = await scrapeSerpAPI(chosenSegment, chosenCity, 'Brasil');
-      const validLeads = await filterLeadsWithWhatsApp(serpResult.leads);
-
-      // Conjunto de telefones existentes para nunca duplicar
       const existingPhones = new Set(leads.map(l => toDialablePhone(l.phone)));
-
       const freshLeadsToInsert: AutomationLead[] = [];
-      for (const scraped of validLeads) {
-        if (!scraped.whatsapp) continue;
-        const norm = toDialablePhone(scraped.whatsapp);
-        if (existingPhones.has(norm) || isBlacklistedPhone(norm) || isBlacklistedPhone(scraped.whatsapp) || isWhatsAppGroup(norm) || isWhatsAppGroup(scraped.whatsapp)) continue;
+      const triedCombinations = new Set<string>();
 
-        const newLead: AutomationLead = {
-          id: randomUUID(),
-          company_name: scraped.name,
-          phone: norm,
-          city: scraped.city || chosenCity,
-          state: 'SP',
-          segment: chosenSegment,
-          source: 'google_serpapi',
-          status: 'pending',
-          interest_level: 'unknown',
-          human_takeover: false,
-          created_at: new Date().toISOString()
-        };
+      // Tenta até 3 combinações de segmento/cidade para atingir os 10 leads do dia
+      for (let attempt = 0; attempt < 3 && freshLeadsToInsert.length < targetBatchSize; attempt++) {
+        const chosenSegment = segments[Math.floor(Math.random() * segments.length)];
+        const chosenCity = cities[Math.floor(Math.random() * cities.length)];
+        const comboKey = `${chosenSegment}|${chosenCity}`;
+        if (triedCombinations.has(comboKey) && segments.length * cities.length > 1) {
+          continue;
+        }
+        triedCombinations.add(comboKey);
 
-        existingPhones.add(norm);
-        freshLeadsToInsert.push(newLead);
-        if (freshLeadsToInsert.length >= 10) break; // Garante lote ideal
+        await addAutomationLog('search', `🔍 Minerando leads no Google (${freshLeadsToInsert.length}/${targetBatchSize}): "${chosenSegment}" em "${chosenCity}"...`);
+
+        const serpResult = await scrapeSerpAPI(chosenSegment, chosenCity, 'Brasil');
+        const validLeads = await filterLeadsWithWhatsApp(serpResult.leads);
+
+        for (const scraped of validLeads) {
+          if (!scraped.whatsapp) continue;
+          const norm = toDialablePhone(scraped.whatsapp);
+          if (!norm || existingPhones.has(norm) || isBlacklistedPhone(norm) || isBlacklistedPhone(scraped.whatsapp) || isWhatsAppGroup(norm) || isWhatsAppGroup(scraped.whatsapp)) {
+            continue;
+          }
+
+          const newLead: AutomationLead = {
+            id: randomUUID(),
+            company_name: scraped.name,
+            phone: norm,
+            city: scraped.city || chosenCity,
+            state: 'SP',
+            segment: chosenSegment,
+            source: 'google_serpapi',
+            status: 'pending',
+            interest_level: 'unknown',
+            human_takeover: false,
+            created_at: new Date().toISOString()
+          };
+
+          existingPhones.add(norm);
+          freshLeadsToInsert.push(newLead);
+          if (freshLeadsToInsert.length >= targetBatchSize) break;
+        }
       }
 
       if (freshLeadsToInsert.length > 0) {
+        gAuto.__lastEmptySearchTimestamp = 0;
         searchedCount = freshLeadsToInsert.length;
         inMemoryLeads = [...freshLeadsToInsert, ...inMemoryLeads];
         await saveLeadsToSupabaseWithRetry(freshLeadsToInsert);
 
-        await addAutomationLog('search', `✅ ${searchedCount} novos leads qualificados e enfileirados para ${chosenSegment} (${chosenCity}).`);
-        // Recarrega lista atualizada
+        await addAutomationLog('search', `✅ ${searchedCount} novos leads qualificados e enfileirados para a meta diária (${dailyTarget}/dia).`);
         leads = await getAutomationLeads();
         pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
+        metrics = await getAutomationMetrics();
       } else {
-        await addAutomationLog('system', `Nenhum novo lead inédito encontrado para ${chosenSegment} em ${chosenCity}. Tentará outro nicho no próximo ciclo.`);
+        gAuto.__lastEmptySearchTimestamp = Date.now();
+        await addAutomationLog('system', `Nenhum novo lead inédito encontrado nesta varredura. Tentará novamente em 1 minuto.`);
       }
     } catch (searchErr: any) {
+      gAuto.__lastEmptySearchTimestamp = Date.now();
       console.error('[Automation] Erro na busca automática:', searchErr);
       await addAutomationLog('error', `Falha na busca do Google: ${searchErr.message || 'Erro desconhecido'}`);
     }
   }
 
   // 5. Se não houver lead para disparar agora
-  if (pendingLeads.length === 0) {
+  if (pendingLeads.length === 0 && !targetLeadId) {
     return {
-      executed: true,
+      executed: searchedCount > 0,
       actionTaken: searchedCount > 0 ? 'searched_only' : 'idle',
       message: searchedCount > 0 
         ? `Busca realizada com sucesso (${searchedCount} leads), mas nenhum pronto para disparo imediato.` 
@@ -1062,7 +1340,37 @@ async function executeAutomationCycleInternal(options: {
     };
   }
 
-  // 6. Realiza o disparo do próximo lead da fila ou do lead alvo solicitado
+  // 6. Em execuções automáticas (!force), respeita estritamente o intervalo anti-ban entre disparos
+  if (!force) {
+    const lastFailedAt = gAuto.__lastFailedDispatchTimestamp || 0;
+    if (Date.now() - lastFailedAt < 30000) {
+      return {
+        executed: searchedCount > 0,
+        actionTaken: searchedCount > 0 ? 'searched_only' : 'idle',
+        message: 'Aguardando 30s para retentar conexão com o microserviço WhatsApp.'
+      };
+    }
+
+    const schedule = calculateNextDispatchSchedule(settings, leads, metrics);
+    if (schedule.status === 'typing') {
+      return {
+        executed: false,
+        actionTaken: 'idle',
+        message: schedule.reason
+      };
+    }
+    if (schedule.status === 'active' && schedule.countdown_seconds > 0) {
+      return {
+        executed: searchedCount > 0,
+        actionTaken: searchedCount > 0 ? 'searched_only' : 'idle',
+        message: searchedCount > 0
+          ? `${searchedCount} leads minerados! Próximo disparo agendado para ${schedule.formatted_time} (${schedule.countdown_seconds}s).`
+          : `Aguardando intervalo anti-ban (${schedule.countdown_seconds}s até ${schedule.formatted_time}).`
+      };
+    }
+  }
+
+  // 7. Realiza o disparo do próximo lead da fila ou do lead alvo solicitado
   const nextLead = targetLeadId 
     ? (leads.find(l => l.id === targetLeadId) || pendingLeads.find(l => l.id === targetLeadId) || pendingLeads[0])
     : pendingLeads[0];
@@ -1122,20 +1430,22 @@ async function executeAutomationCycleInternal(options: {
     );
 
     if (sendResult.success || sendResult.queued) {
-      await addAutomationLog('dispatch', `✅ Disparo ${metrics.dispatchedToday + 1}/${settings.daily_limit} efetuado com sucesso para ${nextLead.company_name}.`, nextLead.phone);
+      gAuto.__lastFailedDispatchTimestamp = 0;
+      await addAutomationLog('dispatch', `✅ Disparo ${metrics.dispatchedToday + 1}/${dailyTarget} efetuado com sucesso para ${nextLead.company_name}.`, nextLead.phone);
 
       return {
         executed: true,
         actionTaken: searchedCount > 0 ? 'searched_and_dispatched' : 'dispatched_only',
-        message: `Disparo ${metrics.dispatchedToday + 1}/${settings.daily_limit} efetuado com sucesso para ${nextLead.company_name}!`,
+        message: `Disparo ${metrics.dispatchedToday + 1}/${dailyTarget} efetuado com sucesso para ${nextLead.company_name}!`,
         leadDispatched: { ...nextLead, status: 'sent', dispatched_at: nowIso }
       };
     } else {
+      gAuto.__lastFailedDispatchTimestamp = Date.now();
       nextLead.status = 'pending';
       nextLead.dispatched_at = undefined;
       await updateAutomationLead(nextLead.phone, {
         status: 'pending',
-        dispatched_at: undefined
+        dispatched_at: null as any
       });
       await addAutomationLog('error', `Falha ao disparar para ${nextLead.company_name}: ${sendResult.error || sendResult.message || 'Erro no WhatsApp Service'}`, nextLead.phone);
       return {
@@ -1144,6 +1454,13 @@ async function executeAutomationCycleInternal(options: {
       };
     }
   } catch (sendErr: any) {
+    gAuto.__lastFailedDispatchTimestamp = Date.now();
+    nextLead.status = 'pending';
+    nextLead.dispatched_at = undefined;
+    await updateAutomationLead(nextLead.phone, {
+      status: 'pending',
+      dispatched_at: null as any
+    });
     await addAutomationLog('error', `Erro na conexão com WhatsApp Service: ${sendErr.message}`, nextLead.phone);
     return {
       executed: false,
@@ -1159,30 +1476,27 @@ async function executeAutomationCycleInternal(options: {
 
 /**
  * Motor autônomo em segundo plano (Server Background Worker)
- * Monitora continuamente o agendamento e executa o disparo pontualmente
- * assim que o contador regressivo atinge zero e a janela comercial está aberta.
+ * Monitora continuamente o agendamento e executa a mineração dos 10 leads diários
+ * e o disparo pontualmente assim que o contador atinge zero, sem depender de abrir o app.
  */
-let isWorkerExecuting = false;
-let globalWorkerTimer: NodeJS.Timeout | null = null;
-
 export function ensureAutomationWorkerRunning() {
-  if (globalWorkerTimer) return;
+  if (gAuto.__automationWorkerTimer) return;
 
-  console.log('[Automation Worker] 🚀 Inicializando motor autônomo de disparos e escuta de IA em segundo plano...');
-  globalWorkerTimer = setInterval(async () => {
-    if (isWorkerExecuting) return;
+  console.log('[Automation Worker] 🚀 Inicializando motor autônomo 24/7 de mineração, disparos e escuta de IA...');
+  gAuto.__automationWorkerTimer = setInterval(async () => {
+    if (gAuto.__isAutomationWorkerExecuting) return;
     try {
-      isWorkerExecuting = true;
+      gAuto.__isAutomationWorkerExecuting = true;
 
       // 1. Sincroniza mensagens recebidas (inbound) do microserviço WhatsApp (mesmo com robô de prospecção pausado)
       try {
         const { syncInboundWhatsAppMessages } = await import('./aiSdr');
         await syncInboundWhatsAppMessages();
-      } catch (inbErr) {
+      } catch {
         // Ignora silenciosamente se microserviço estiver offline
       }
 
-      // 2. Avalia próximo disparo ativo de prospecção
+      // 2. Avalia próximo disparo ativo ou mineração de prospecção
       const settings = await getAutomationSettings();
       if (!settings.is_active) {
         return;
@@ -1192,26 +1506,28 @@ export function ensureAutomationWorkerRunning() {
       const metrics = await getAutomationMetrics();
       const schedule = calculateNextDispatchSchedule(settings, leads, metrics);
       
-      // Se estiver pronto para disparar ou o contador zerou
-      if (schedule.status === 'ready_now' || (schedule.status === 'active' && schedule.countdown_seconds <= 0)) {
-        console.log(`[Automation Worker] ⏰ Horário programado atingido! Disparando para ${schedule.next_lead?.company_name || 'próximo lead'}...`);
+      // Se estiver pronto para disparar, fila vazia na janela ativa, ou o contador zerou
+      if (
+        schedule.status === 'ready_now' ||
+        schedule.status === 'queue_empty' ||
+        (schedule.status === 'active' && schedule.countdown_seconds <= 0)
+      ) {
         const result = await runAutomationCycle(false);
         if (result.executed) {
-          console.log(`[Automation Worker] ✅ Disparo automático efetuado: ${result.message}`);
-        } else {
-          console.log(`[Automation Worker] ℹ️ Ciclo avaliado: ${result.message}`);
+          console.log(`[Automation Worker] ✅ Ação automática efetuada: ${result.message}`);
         }
       }
     } catch (err: any) {
       console.error('[Automation Worker] Erro no ciclo de disparo:', err?.message || err);
     } finally {
-      isWorkerExecuting = false;
+      gAuto.__isAutomationWorkerExecuting = false;
     }
   }, 4000);
 }
 
-// Inicializa automaticamente no carregamento do módulo
+// Inicializa automaticamente no carregamento do módulo no servidor
 if (typeof window === 'undefined') {
   ensureAutomationWorkerRunning();
 }
+
 

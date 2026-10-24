@@ -1,16 +1,31 @@
 import { NextResponse } from 'next/server';
-import { getServiceUrl, setServiceUrl, getWhatsAppStatus } from '@/lib/whatsapp';
+import { 
+  ensureServiceUrlLoaded, 
+  persistServiceUrlToCloud, 
+  setDetectedAppOrigin, 
+  getDetectedAppOrigin,
+  getWhatsAppStatus,
+  updateWhatsAppConfig 
+} from '@/lib/whatsapp';
 import fs from 'fs';
 import path from 'path';
 
-export async function GET() {
+export async function GET(req: Request) {
+  try {
+    setDetectedAppOrigin(new URL(req.url).origin);
+  } catch {}
+  const url = await ensureServiceUrlLoaded();
   return NextResponse.json({
-    url: getServiceUrl(),
+    url,
   });
 }
 
 export async function POST(req: Request) {
   try {
+    try {
+      setDetectedAppOrigin(new URL(req.url).origin);
+    } catch {}
+
     const body = await req.json();
     const newUrl = (body.url || '').trim().replace(/\/+$/, '');
 
@@ -18,9 +33,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'URL do microserviço é obrigatória' }, { status: 400 });
     }
 
-    setServiceUrl(newUrl);
+    await persistServiceUrlToCloud(newUrl);
 
-    // Tentar atualizar o arquivo .env.local para persistir
+    // Tentar atualizar o arquivo .env.local para persistir localmente
     try {
       const envPath = path.join(process.cwd(), '.env.local');
       if (fs.existsSync(envPath)) {
@@ -35,6 +50,12 @@ export async function POST(req: Request) {
     } catch (fsErr) {
       console.warn('Não foi possível persistir no .env.local:', fsErr);
     }
+
+    // Sincronizar URL de webhook/app com o microserviço Go para que ele acione a automação 24/7
+    const appOrigin = getDetectedAppOrigin();
+    await updateWhatsAppConfig({
+      webhook_url: `${appOrigin}/api/whatsapp/webhook`
+    } as any).catch(() => false);
 
     // Testar conexão
     const status = await getWhatsAppStatus();

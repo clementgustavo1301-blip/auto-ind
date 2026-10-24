@@ -9,14 +9,17 @@ import {
   setCurrentlyTyping,
   ensureAutomationWorkerRunning
 } from '@/lib/automation';
-import { getWhatsAppQueue, getWhatsAppStatus } from '@/lib/whatsapp';
+import { getWhatsAppQueue, getWhatsAppStatus, setDetectedAppOrigin } from '@/lib/whatsapp';
 import { isSamePhone } from '@/lib/phone';
 import { syncInboundWhatsAppMessages } from '@/lib/aiSdr';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    try {
+      setDetectedAppOrigin(new URL(request.url).origin);
+    } catch {}
     ensureAutomationWorkerRunning();
     await syncInboundWhatsAppMessages().catch(() => 0);
 

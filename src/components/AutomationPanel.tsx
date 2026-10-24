@@ -221,7 +221,7 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
           }
         }
         setCurrentlyTyping(data.currently_typing || null);
-        if (!editSettings) {
+        if (!isSettingsOpen && data.settings) {
           setEditSettings(data.settings);
         }
       }
@@ -230,7 +230,7 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [editSettings]);
+  }, [isSettingsOpen]);
 
   // Carrega regras anti-ban diretamente do microserviço Go
   const fetchAntiBanConfig = useCallback(async () => {
@@ -727,21 +727,46 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
   // Salvar configurações gerais
   const handleSaveSettings = async () => {
     if (!editSettings) return;
+    soundEngine.playMechanicalClick('primary');
     setIsSavingSettings(true);
     try {
+      const finalSegments = newSegmentInput.trim() && !editSettings.target_segments.includes(newSegmentInput.trim())
+        ? [...editSettings.target_segments, newSegmentInput.trim()]
+        : editSettings.target_segments;
+      const finalCities = newCityInput.trim() && !editSettings.target_cities.includes(newCityInput.trim())
+        ? [...editSettings.target_cities, newCityInput.trim()]
+        : editSettings.target_cities;
+
+      const payloadToSave: AutomationSettings = {
+        ...editSettings,
+        is_active: settings?.is_active ?? editSettings.is_active,
+        target_segments: finalSegments,
+        target_cities: finalCities
+      };
+
       const res = await fetch('/api/automation/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editSettings)
+        body: JSON.stringify(payloadToSave)
       });
       if (res.ok) {
         const data = await res.json();
+        soundEngine.playSentNotification();
         setSettings(data);
+        setEditSettings(data);
+        setNewSegmentInput('');
+        setNewCityInput('');
+        setAntiBanConfig(prev => ({ ...prev, daily_limit: data.daily_limit }));
         setIsSettingsOpen(false);
-        fetchStatus();
+        setCycleFeedback(`✅ Configurações salvas e ativas! Meta: ${data.daily_limit}/dia • Horário: ${data.start_hour} às ${data.end_hour} • Intervalo: ${data.min_interval_mins}-${data.max_interval_mins} min.`);
+        await fetchStatus();
+        setTimeout(() => setCycleFeedback(null), 5000);
+      } else {
+        alert('Erro ao salvar configurações da automação.');
       }
     } catch (e) {
       console.error('Erro ao salvar configurações:', e);
+      alert('Falha de conexão ao salvar configurações.');
     } finally {
       setIsSavingSettings(false);
     }
@@ -889,7 +914,7 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
               </span>
             </div>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Horário: <span className="text-zinc-200 font-mono font-bold">{settings?.start_hour || '09:00'} às {settings?.end_hour || '17:30'}</span> • Cota: <span className="text-[#E5FF00] font-mono font-bold">{antiBanConfig.daily_limit} disparos/dia</span> • Hoje: <span className="text-emerald-400 font-mono font-bold">{antiBanConfig.sent_today} enviados</span>
+              Horário: <span className="text-zinc-200 font-mono font-bold">{settings?.start_hour || '09:00'} às {settings?.end_hour || '17:30'}</span> • Cota: <span className="text-[#E5FF00] font-mono font-bold">{settings?.daily_limit ?? antiBanConfig.daily_limit} disparos/dia</span> • Hoje: <span className="text-emerald-400 font-mono font-bold">{metrics?.dispatchedToday ?? antiBanConfig.sent_today} enviados</span>
             </p>
           </div>
         </div>
@@ -926,6 +951,9 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
           <button
             onClick={() => {
               soundEngine.playMechanicalClick('secondary');
+              if (settings) {
+                setEditSettings({ ...settings });
+              }
               setIsSettingsOpen(true);
             }}
             className="px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-2 border-zinc-800 font-mono text-xs font-bold uppercase tracking-wide flex items-center gap-2 transition-colors active:scale-95 cursor-pointer"
@@ -2161,7 +2189,7 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
                   </div>
                 </div>
 
-                {/* Horários e Cota */}
+                {/* Horários, Cota e Intervalos entre Disparos */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-zinc-400 mb-1.5 font-bold uppercase">
@@ -2204,6 +2232,47 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
                       onChange={e => setEditSettings({ ...editSettings, end_hour: e.target.value })}
                       placeholder="17:30"
                       className="w-full bg-zinc-900 border border-zinc-800 p-2 text-zinc-100 font-mono focus:border-[#E5FF00] outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Intervalo em Minutos da Esteira de Prospecção */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-zinc-400 mb-1.5 font-bold uppercase">
+                      Intervalo Mínimo entre Leads (min)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={180}
+                      value={editSettings.min_interval_mins}
+                      onChange={e => {
+                        const val = Math.max(1, parseInt(e.target.value) || 15);
+                        setEditSettings({
+                          ...editSettings,
+                          min_interval_mins: val,
+                          max_interval_mins: Math.max(val, editSettings.max_interval_mins || 35)
+                        });
+                      }}
+                      className="w-full bg-zinc-900 border border-zinc-800 p-2 text-zinc-100 font-mono font-bold focus:border-[#E5FF00] outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-zinc-400 mb-1.5 font-bold uppercase">
+                      Intervalo Máximo entre Leads (min)
+                    </label>
+                    <input
+                      type="number"
+                      min={editSettings.min_interval_mins || 1}
+                      max={240}
+                      value={editSettings.max_interval_mins}
+                      onChange={e => {
+                        const val = Math.max(editSettings.min_interval_mins || 1, parseInt(e.target.value) || 35);
+                        setEditSettings({ ...editSettings, max_interval_mins: val });
+                      }}
+                      className="w-full bg-zinc-900 border border-zinc-800 p-2 text-zinc-100 font-mono font-bold focus:border-[#E5FF00] outline-none"
                     />
                   </div>
                 </div>
@@ -2482,6 +2551,24 @@ export function AutomationPanel({ initialLeads = [] }: AutomationPanelProps) {
                       </div>
                     </div>
                   </div>
+                </div>
+
+                {/* Instruções da IA SDR (Prompt do Robô) */}
+                <div className="p-3 bg-zinc-900/60 border border-zinc-800 space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-1">
+                    <label className="text-zinc-300 font-bold uppercase flex items-center gap-1.5">
+                      <Bot className="w-3.5 h-3.5 text-[#E5FF00]" />
+                      <span>Instruções da IA SDR (Regras de Resposta & Qualificação)</span>
+                    </label>
+                    <span className="text-[10px] text-[#E5FF00] font-mono">Mossoró - RN (só se perguntarem) • Sem invenções</span>
+                  </div>
+                  <textarea
+                    rows={5}
+                    value={editSettings.ai_prompt || ''}
+                    onChange={e => setEditSettings({ ...editSettings, ai_prompt: e.target.value })}
+                    placeholder="Instruções para o atendimento da IA SDR..."
+                    className="w-full bg-zinc-950 border border-zinc-800 p-2.5 text-zinc-100 outline-none focus:border-[#E5FF00] text-xs font-mono leading-relaxed"
+                  />
                 </div>
 
                 {/* Provedor & Chave de IA */}

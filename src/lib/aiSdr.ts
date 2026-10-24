@@ -165,6 +165,33 @@ function analyzeHeuristic(
     };
   }
 
+  // 1.2 Pergunta sobre localização ("de onde você é?", "qual cidade?", "onde ficam?") -> informa Mossoró - RN APENAS porque perguntaram
+  const normIncoming = normalizeText(incomingText);
+  const locationPatterns = [
+    'de onde voce e', 'de onde voces sao', 'voces sao de onde', 'voce e de onde',
+    'qual cidade voce', 'qual cidade voces', 'qual sua cidade', 'qual a cidade de voces',
+    'onde fica a empresa', 'onde voces ficam', 'fica onde', 'ficam onde',
+    'voce fala de onde', 'voces falam de onde', 'sao daqui', 'e daqui de', 'qual estado'
+  ];
+  if (locationPatterns.some(p => normIncoming.includes(p))) {
+    if (profile === 'sergio') {
+      return {
+        replyMessage: `Nós somos de Mossoró - RN, maior polo salineiro do Brasil, e atendemos indústrias de todo o país.\n\nVocês utilizam sal industrial na operação da ${lead.company_name}?`,
+        interestLevel: 'medium',
+        qualificationStatus: 'chatting',
+        notes: 'Lead perguntou a localização; informado Mossoró - RN.',
+        shouldNotifyHuman: false
+      };
+    }
+    return {
+      replyMessage: `Nós somos de Mossoró - RN e atendemos empresas de todo o Brasil de forma 100% digital.\n\nHoje a ${lead.company_name} já conta com um site atualizado ou buscam ampliar a captação de clientes pelo Google e IAs?`,
+      interestLevel: 'medium',
+      qualificationStatus: 'chatting',
+      notes: 'Lead perguntou a localização; informado Mossoró - RN.',
+      shouldNotifyHuman: false
+    };
+  }
+
   // 2. Padrões de Interesse Explícito (Qualifica APENAS se disser claramente que tem interesse ou solicitar cotação/proposta)
   const explicitInterestPatterns = [
     'tenho interesse', 'temos interesse', 'tenho sim', 'temos sim',
@@ -249,6 +276,10 @@ ${formattedHistory}
 
 Última mensagem enviada pelo lead:
 "${incomingText}"
+
+REGRAS DE VERACIDADE E LOCALIZAÇÃO (RIGOR ABSOLUTO - NÃO INVENTE NADA):
+- PROIBIDO INVENTAR QUALQUER INFORMAÇÃO: NUNCA invente preços, valores, prazos, nomes de clientes atendidos, resultados fictícios, endereços, telefone ou condições que não estão escritos aqui. Se o lead perguntar um preço, prazo ou detalhe específico que você não sabe, diga de forma simples e transparente que o Gustavo (ou nosso consultor) passará essa informação exata em seguida.
+- LOCALIZAÇÃO (MOSSORÓ - RN APENAS SE PERGUNTAREM): Você/Gustavo é de Mossoró - RN (e atende empresas de todo o Brasil). Porém, você SÓ deve falar que é de Mossoró - RN SE o lead perguntar explicitamente de onde você é, qual sua cidade ou onde fica a empresa. Se o lead NÃO perguntar de onde você é, NUNCA mencione Mossoró por conta própria.
 
 REGRAS OBRIGATÓRIAS E RESTRITAS DE STATUS (SIGA COM RIGOR ABSOLUTO):
 1. "qualified": Atribua "qualified" (e interestLevel "high") EXCLUSIVAMENTE se o lead declarou EXPRESSAMENTE que TEM INTERESSE (ex: "tenho interesse", "quero saber mais", "pode mandar uma proposta", "quanto custa?", "me envia a cotação/tabela").

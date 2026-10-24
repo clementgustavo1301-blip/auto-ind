@@ -102,6 +102,7 @@ type AntiBanConfig struct {
 	SentToday     int    `json:"sent_today"`
 	LastResetDate string `json:"last_reset_date"`
 	WebhookURL    string `json:"webhook_url,omitempty"`
+	AppURL        string `json:"app_url,omitempty"`
 }
 
 type InboundMessage struct {
@@ -846,6 +847,115 @@ func (s *ServiceManager) applyCooldown(cfg AntiBanConfig) {
 }
 
 // ============================================================================
+// HEARTBEAT AUTÔNOMO 24/7 (ACIONA A AUTOMAÇÃO NEXT.JS MESMO COM O APP FECHADO)
+// ============================================================================
+
+func (s *ServiceManager) captureAppOrigin(r *http.Request) {
+	rawOrigin := strings.TrimSpace(r.Header.Get("X-App-Base-Url"))
+	if rawOrigin == "" || (!strings.HasPrefix(rawOrigin, "http://") && !strings.HasPrefix(rawOrigin, "https://")) {
+		return
+	}
+	cleanOrigin := strings.TrimRight(rawOrigin, "/")
+
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
+	// Não sobrescreve uma URL de nuvem (Vercel) já registrada por localhost
+	isNewLocal := strings.Contains(cleanOrigin, "localhost") || strings.Contains(cleanOrigin, "127.0.0.1")
+	isCurrentRemote := s.config.AppURL != "" && !strings.Contains(s.config.AppURL, "localhost") && !strings.Contains(s.config.AppURL, "127.0.0.1")
+
+	if isNewLocal && isCurrentRemote {
+		return
+	}
+
+	changed := false
+	if s.config.AppURL != cleanOrigin {
+		s.config.AppURL = cleanOrigin
+		changed = true
+	}
+	if s.config.WebhookURL == "" || (strings.Contains(s.config.WebhookURL, "localhost") && !isNewLocal) {
+		s.config.WebhookURL = cleanOrigin + "/api/whatsapp/webhook"
+		changed = true
+	}
+	if changed {
+		saveConfig(s.config)
+		log.Printf("🔗 [Auto-Sync] URL do painel registrada para disparos autônomos 24/7: %s", cleanOrigin)
+	}
+}
+
+func (s *ServiceManager) getAutomationTargetURLs() []string {
+	s.cfgMu.RLock()
+	cfgAppURL := strings.TrimRight(strings.TrimSpace(s.config.AppURL), "/")
+	cfgWebhook := strings.TrimSpace(s.config.WebhookURL)
+	s.cfgMu.RUnlock()
+
+	seen := make(map[string]bool)
+	var targets []string
+	addTarget := func(base string) {
+		base = strings.TrimRight(strings.TrimSpace(base), "/")
+		if base == "" || (!strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://")) {
+			return
+		}
+		endpoint := base + "/api/automation/run-cycle"
+		if !seen[endpoint] {
+			seen[endpoint] = true
+			targets = append(targets, endpoint)
+		}
+	}
+
+	if cfgAppURL != "" {
+		addTarget(cfgAppURL)
+	}
+	if envApp := os.Getenv("APP_URL"); envApp != "" {
+		addTarget(envApp)
+	}
+	if cfgWebhook != "" {
+		if idx := strings.Index(cfgWebhook, "/api/"); idx > 0 {
+			addTarget(cfgWebhook[:idx])
+		}
+	}
+	if envWebhook := os.Getenv("WEBHOOK_URL"); envWebhook != "" {
+		if idx := strings.Index(envWebhook, "/api/"); idx > 0 {
+			addTarget(envWebhook[:idx])
+		}
+	}
+	addTarget("http://localhost:3000")
+
+	return targets
+}
+
+func (s *ServiceManager) startAutomationHeartbeat(ctx context.Context) {
+	log.Println("⏰ [Automation Heartbeat] Agendador 24/7 iniciado (verifica e dispara a automação mesmo com o app fechado).")
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+
+	client := &http.Client{Timeout: 55 * time.Second}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			targets := s.getAutomationTargetURLs()
+			for _, endpoint := range targets {
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(`{"force":false}`))
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("User-Agent", "AutoInd-GoHeartbeat/1.0")
+
+				resp, err := client.Do(req)
+				if err != nil {
+					continue
+				}
+				_ = resp.Body.Close()
+			}
+		}
+	}
+}
+
+// ============================================================================
 // HANDLERS HTTP DA API REST
 // ============================================================================
 
@@ -1337,6 +1447,9 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		if v, ok := updates["webhook_url"].(string); ok {
 			appManager.config.WebhookURL = strings.TrimSpace(v)
 		}
+		if v, ok := updates["app_url"].(string); ok && strings.TrimSpace(v) != "" {
+			appManager.config.AppURL = strings.TrimRight(strings.TrimSpace(v), "/")
+		}
 		saveConfig(appManager.config)
 		cfg := appManager.config
 		appManager.cfgMu.Unlock()
@@ -1688,8 +1801,9 @@ func main() {
 		}
 	}
 
-	// 4. Iniciar Worker Sequencial da Fila em Background
+	// 4. Iniciar Worker Sequencial da Fila e Heartbeat Autônomo 24/7 em Background
 	go appManager.startQueueWorker(ctx)
+	go appManager.startAutomationHeartbeat(ctx)
 
 	// 5. Configurar Rotas HTTP REST
 	mux := http.NewServeMux()
@@ -1711,9 +1825,14 @@ func main() {
 	}
 	serverAddr := ":" + port
 
+	handlerWithOriginCapture := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appManager.captureAppOrigin(r)
+		mux.ServeHTTP(w, r)
+	})
+
 	server := &http.Server{
 		Addr:    serverAddr,
-		Handler: mux,
+		Handler: handlerWithOriginCapture,
 	}
 
 	go func() {

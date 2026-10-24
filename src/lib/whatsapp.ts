@@ -3,28 +3,100 @@
  * Gerencia envio sequencial, verificação de fila e status de conexão.
  */
 
-let customServiceUrl: string | null = null;
+import { supabase } from './supabase';
+
+const g = globalThis as any;
+
+export function setDetectedAppOrigin(origin: string) {
+  if (!origin) return;
+  const cleaned = origin.trim().replace(/\/+$/, '');
+  if (cleaned.startsWith('http')) {
+    g.__detectedAppOrigin = cleaned;
+  }
+}
+
+export function getDetectedAppOrigin(): string {
+  if (g.__detectedAppOrigin) return g.__detectedAppOrigin;
+  if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL.trim().replace(/\/+$/, '');
+  if (process.env.APP_URL) return process.env.APP_URL.trim().replace(/\/+$/, '');
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim().replace(/\/+$/, '')}`;
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL.trim().replace(/\/+$/, '')}`;
+  }
+  return 'http://localhost:3000';
+}
 
 export function setServiceUrl(url: string) {
-  customServiceUrl = url.trim().replace(/\/+$/, '');
+  const cleaned = url.trim().replace(/\/+$/, '');
+  g.__customWhatsAppServiceUrl = cleaned;
+  g.__hasLoadedWhatsAppServiceUrl = true;
+}
+
+export async function persistServiceUrlToCloud(url: string): Promise<void> {
+  const cleaned = url.trim().replace(/\/+$/, '');
+  setServiceUrl(cleaned);
+  if (!supabase || !cleaned) return;
+  try {
+    await supabase.from('automation_logs').delete().eq('lead_phone', '__wa_endpoint__');
+    await supabase.from('automation_logs').insert([{
+      event_type: 'system',
+      details: cleaned,
+      lead_phone: '__wa_endpoint__'
+    }]);
+  } catch {
+    // Fallback silencioso
+  }
+}
+
+export async function ensureServiceUrlLoaded(): Promise<string> {
+  if (g.__customWhatsAppServiceUrl) {
+    return g.__customWhatsAppServiceUrl;
+  }
+  if (process.env.WHATSAPP_SERVICE_URL) {
+    return process.env.WHATSAPP_SERVICE_URL.trim().replace(/\/+$/, '');
+  }
+  if (!g.__hasLoadedWhatsAppServiceUrl && supabase) {
+    g.__hasLoadedWhatsAppServiceUrl = true;
+    try {
+      const { data } = await supabase
+        .from('automation_logs')
+        .select('details')
+        .eq('lead_phone', '__wa_endpoint__')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (data?.details && data.details.startsWith('http')) {
+        g.__customWhatsAppServiceUrl = data.details.trim().replace(/\/+$/, '');
+        return g.__customWhatsAppServiceUrl;
+      }
+    } catch {
+      // Fallback para localhost
+    }
+  }
+  return 'http://localhost:5001';
 }
 
 export function getServiceUrl(): string {
-  if (customServiceUrl) return customServiceUrl;
+  if (g.__customWhatsAppServiceUrl) return g.__customWhatsAppServiceUrl;
   return (process.env.WHATSAPP_SERVICE_URL || 'http://localhost:5001').trim().replace(/\/+$/, '');
 }
 
 /**
  * Helper interno para chamadas HTTP ao microserviço WhatsApp,
- * incluindo automaticamente os headers necessários para bypass de aviso do ngrok e Cloudflare.
+ * incluindo automaticamente os headers necessários para bypass de aviso do ngrok e Cloudflare
+ * e registrando a URL base do Next.js para o heartbeat autônomo 24/7 do microserviço Go.
  */
 async function fetchWhatsAppService(pathOrUrl: string, init?: RequestInit): Promise<Response> {
+  const baseUrl = await ensureServiceUrlLoaded();
   const url = pathOrUrl.startsWith('http') 
     ? pathOrUrl 
-    : `${getServiceUrl()}${pathOrUrl.startsWith('/') ? pathOrUrl : '/' + pathOrUrl}`;
+    : `${baseUrl}${pathOrUrl.startsWith('/') ? pathOrUrl : '/' + pathOrUrl}`;
 
   const headers = new Headers(init?.headers || {});
   headers.set('ngrok-skip-browser-warning', 'true');
+  headers.set('X-App-Base-Url', getDetectedAppOrigin());
   if (!headers.has('User-Agent')) {
     headers.set('User-Agent', 'AutoInd-WhatsAppClient/1.0');
   }
@@ -228,8 +300,8 @@ export async function sendWhatsAppHumanBubbles(
   for (let i = 0; i < bubbles.length; i++) {
     const bubble = bubbles[i];
     if (i > 0) {
-      // Aguarda o celular enviar e liberar a anterior
-      await waitForPhoneQueueIdle(options.phone, 15000);
+      // Aguarda o celular enviar e liberar a anterior (até 35s para cobrir digitação humanizada longa)
+      await waitForPhoneQueueIdle(options.phone, 35000);
       // Pausa humanizada entre a entrega de um balão e o próximo (5.5s a 6s para respeitar a trava do microserviço)
       await new Promise(r => setTimeout(r, 5500 + Math.random() * 500));
     }

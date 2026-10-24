@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server';
-import { runAutomationCycle } from '@/lib/automation';
+import { runAutomationCycle, ensureAutomationWorkerRunning } from '@/lib/automation';
+import { setDetectedAppOrigin } from '@/lib/whatsapp';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
+    try {
+      setDetectedAppOrigin(new URL(request.url).origin);
+    } catch {}
+    ensureAutomationWorkerRunning();
+
     let force = false;
     let skipSearch = false;
     let targetLeadId: string | undefined = undefined;
@@ -33,7 +39,12 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   try {
-    // Permite execução via Vercel Cron ou Healthcheck
+    try {
+      setDetectedAppOrigin(new URL(request.url).origin);
+    } catch {}
+    ensureAutomationWorkerRunning();
+
+    // Permite execução via Vercel Cron, Heartbeat Go ou Healthcheck
     const result = await runAutomationCycle({ force: false, skipSearch: false });
     return NextResponse.json(result, {
       headers: { 'Cache-Control': 'no-store' }
