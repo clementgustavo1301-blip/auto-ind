@@ -46,7 +46,7 @@ import {
 } from '@/types';
 import { formatPhoneDisplay, isSamePhone } from '@/lib/phone';
 import { soundEngine } from '@/lib/sound-effects';
-import { AUTOMATION_PROFILES } from '@/lib/automation';
+import { AUTOMATION_PROFILES } from '@/lib/automationProfiles';
 export interface CopywritingPreset {
   id: string;
   category: string;
