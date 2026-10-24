@@ -19,16 +19,13 @@
     },
     {
       "name": "whatsapp-tunnel",
-      "script": "./tunnel.sh",
-      "interpreter": "bash",
+      "script": "ngrok",
+      "args": "http 5001 --domain=elusive-deduce-liver.ngrok-free.dev",
+      "interpreter": "none",
       "autorestart": true,
       "restart_delay": 4000,
       "max_restarts": 100,
-      "watch": false,
-      "env": {
-        "SSL_CERT_FILE": "/data/data/com.termux/files/usr/etc/tls/cert.pem",
-        "SSL_CERT_DIR": "/data/data/com.termux/files/usr/etc/tls/certs"
-      }
+      "watch": false
     }
   ]
 }
