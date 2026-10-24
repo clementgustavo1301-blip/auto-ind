@@ -1010,7 +1010,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
   const totalRepliedCount = chattingCount + qualifiedCount;
   const leadsDispatchedToday = metrics?.dispatchedToday ?? 0;
   const dailyQuota = settings?.daily_limit || antiBanConfig.daily_limit || 15;
-  const isLegacyTermuxBinary = Boolean(waServiceStatus?.connected && typeof waServiceStatus?.inbound_count === 'undefined');
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -1101,20 +1100,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
           </button>
 
           <button
-            type="button"
-            onClick={() => {
-              if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('leadcore:test-qualified-popup'));
-              }
-            }}
-            className="px-3 sm:px-3.5 py-2.5 bg-[#25D366]/20 hover:bg-[#25D366] text-[#25D366] hover:text-zinc-950 border-2 border-[#25D366] font-mono text-[11px] sm:text-xs font-black uppercase tracking-wide flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            title="Disparar um Pop-up e Notificação Push de teste no seu celular"
-          >
-            <Flame className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Testar Pop-up</span>
-          </button>
-
-          <button
             onClick={() => {
               soundEngine.playMechanicalClick('secondary');
               if (settings) {
@@ -1162,54 +1147,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
           </div>
         </div>
       </div>
-
-      {/* ALERTA DE ATUALIZAÇÃO DO MOTOR TERMUX QUANDO O BINÁRIO ANTIGO NÃO POSSUI ESCUTA DE RESPOSTAS (/api/inbound) */}
-      {isLegacyTermuxBinary && (
-        <div className="bg-amber-950/90 border-4 border-amber-400 p-4 shadow-[6px_6px_0_0_#18181B] font-mono text-xs text-amber-100 flex flex-col gap-3">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-              <div>
-                <h4 className="font-black text-amber-300 uppercase tracking-wider text-xs sm:text-sm">
-                  ⚠️ Atualização Rápida do Motor Termux Necessária (Escuta Automática de Respostas IA SDR)
-                </h4>
-                <p className="text-[11px] text-amber-100/90 mt-1 leading-relaxed">
-                  Detectamos que o motor WhatsApp no seu celular está rodando a compilação antiga (de 18/10), que enviava mensagens mas ainda não tinha o receptor de respostas (<code className="bg-black/40 px-1 py-0.5 text-amber-300">/api/inbound</code>). Atualize o binário no Termux com 1 comando (sem perder a conexão do WhatsApp) ou clique em <strong>+ Registrar Resposta</strong> para testar a IA agora:
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
-              <button
-                type="button"
-                onClick={() => {
-                  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-                  const cmd = `curl -L "${origin}/whatsapp-termux.tar.gz" -o whatsapp-termux.tar.gz && tar -xzvf whatsapp-termux.tar.gz && chmod +x whatsapp-service-linux-* && pm2 restart all`;
-                  navigator.clipboard.writeText(cmd);
-                  setCopiedTermuxCmd(true);
-                  setTimeout(() => setCopiedTermuxCmd(false), 4000);
-                }}
-                className="flex-1 sm:flex-initial px-3.5 py-2 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-black uppercase text-[11px] border-2 border-zinc-950 shadow-[2px_2px_0_0_#000] cursor-pointer"
-              >
-                {copiedTermuxCmd ? '✓ Comando Copiado! Cole no Termux' : '📋 Copiar Comando de Atualização Termux'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  soundEngine.playMechanicalClick('secondary');
-                  const lastSentLead = leads.find(l => l.status === 'sent' || l.status === 'chatting');
-                  setRecordReplyForm({ phone: lastSentLead?.phone || '', message: '' });
-                  setIsRecordReplyModalOpen(true);
-                }}
-                className="flex-1 sm:flex-initial px-3.5 py-2 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-black uppercase text-[11px] border-2 border-zinc-950 shadow-[2px_2px_0_0_#000] cursor-pointer"
-              >
-                💬 Responder / Testar IA Agora
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* FEEDBACK DE EXECUÇÃO DO CICLO */}
       <AnimatePresence>

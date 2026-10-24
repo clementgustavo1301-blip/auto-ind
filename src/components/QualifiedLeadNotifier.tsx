@@ -271,6 +271,14 @@ export function QualifiedLeadNotifier({ onOpenLeadInAutomation }: QualifiedLeadN
       const nowMs = Date.now();
       for (const item of alerts) {
         if (!item?.id || seen.has(item.id)) continue;
+        // Ignora alertas simulados de teste para nunca exibir pop-up de teste
+        if (
+          item.company_name?.toLowerCase().includes('teste push') ||
+          item.phone === '5584999999999'
+        ) {
+          markAlertIdSeen(item.id);
+          continue;
+        }
         const itemAgeMs = nowMs - new Date(item.timestamp || 0).getTime();
         if (isInitialLoad && itemAgeMs > 120000) {
           markAlertIdSeen(item.id);
