@@ -17,7 +17,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await processIncomingWhatsAppMessage(phone, message);
+    const result = await processIncomingWhatsAppMessage(phone, message, {
+      pushName: body.push_name || body.pushName,
+      senderJid: body.sender_jid || body.senderJid,
+      chatJid: body.chat_jid || body.chatJid,
+    });
 
     return NextResponse.json(result, {
       headers: { 'Cache-Control': 'no-store' }

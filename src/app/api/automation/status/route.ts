@@ -9,7 +9,7 @@ import {
   setCurrentlyTyping,
   ensureAutomationWorkerRunning
 } from '@/lib/automation';
-import { getWhatsAppQueue, getWhatsAppStatus, setDetectedAppOrigin } from '@/lib/whatsapp';
+import { getWhatsAppQueue, getWhatsAppStatus, setDetectedAppOrigin, updateWhatsAppConfig } from '@/lib/whatsapp';
 import { isSamePhone } from '@/lib/phone';
 import { syncInboundWhatsAppMessages } from '@/lib/aiSdr';
 import { getRecentQualifiedAlerts } from '@/lib/pushNotifications';
@@ -33,6 +33,13 @@ export async function GET(request: Request) {
       getWhatsAppStatus().catch(() => null),
       getRecentQualifiedAlerts().catch(() => [])
     ]);
+
+    // Garante estritamente 1 Lead = 1 Disparo: se o microserviço Go contou múltiplos balões do mesmo lead, sincroniza com dispatchedToday
+    if (waStatus && typeof metrics?.dispatchedToday === 'number' && waStatus.sent_today > metrics.dispatchedToday) {
+      waStatus.sent_today = metrics.dispatchedToday;
+      waStatus.limit_reached = metrics.dispatchedToday >= (settings?.daily_limit || waStatus.daily_limit || 15);
+      updateWhatsAppConfig({ sent_today: metrics.dispatchedToday }).catch(() => {});
+    }
 
     // Se o microserviço Go estiver digitando ativamente para alguém na fila, sincroniza com o estado global
     const typingQueueItem = (waQueue || []).find(q => q.status === 'typing');

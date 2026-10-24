@@ -121,6 +121,8 @@ export interface WhatsAppInboundMessage {
   message: string;
   timestamp: string;
   push_name?: string;
+  sender_jid?: string;
+  chat_jid?: string;
 }
 
 export interface WhatsAppSendResponse {
@@ -280,11 +282,18 @@ export async function sendWhatsAppHumanBubbles(
   onBubbleSent?: (bubbleText: string, index: number, total: number) => Promise<void>
 ): Promise<WhatsAppSendResponse> {
   const bubbles = splitIntoHumanBubbles(options.message);
+  const cfgBefore = await getWhatsAppConfig().catch(() => null);
+  const initialSentToday = typeof cfgBefore?.sent_today === 'number' ? cfgBefore.sent_today : null;
 
   if (bubbles.length <= 1) {
     const res = await sendWhatsAppMessage(options);
-    if ((res.success || res.queued) && onBubbleSent) {
-      await onBubbleSent(options.message, 0, 1).catch(() => {});
+    if (res.success || res.queued) {
+      if (options.is_reply && initialSentToday !== null) {
+        await updateWhatsAppConfig({ sent_today: initialSentToday }).catch(() => {});
+      }
+      if (onBubbleSent) {
+        await onBubbleSent(options.message, 0, 1).catch(() => {});
+      }
     }
     return res;
   }
@@ -302,6 +311,10 @@ export async function sendWhatsAppHumanBubbles(
     if (i > 0) {
       // Aguarda o celular enviar e liberar a anterior (até 35s para cobrir digitação humanizada longa)
       await waitForPhoneQueueIdle(options.phone, 35000);
+      // Garante que o 2º/3º balão do mesmo lead nunca seja barrado por limit_reached nem duplique o contador (1 Lead = 1 Disparo)
+      if (initialSentToday !== null) {
+        await updateWhatsAppConfig({ sent_today: initialSentToday }).catch(() => {});
+      }
       // Pausa humanizada entre a entrega de um balão e o próximo (5.5s a 6s para respeitar a trava do microserviço)
       await new Promise(r => setTimeout(r, 5500 + Math.random() * 500));
     }
@@ -322,6 +335,12 @@ export async function sendWhatsAppHumanBubbles(
       console.warn(`[HumanBubbles] Falha ao enviar balão ${i + 1}/${bubbles.length}:`, res.message);
       return res;
     }
+  }
+
+  // Consolida regra estrita: 1 Lead = 1 Disparo (e respostas da IA = 0 disparos extras)
+  if (initialSentToday !== null) {
+    const targetSentToday = options.is_reply ? initialSentToday : initialSentToday + 1;
+    await updateWhatsAppConfig({ sent_today: targetSentToday }).catch(() => {});
   }
 
   return lastResponse;

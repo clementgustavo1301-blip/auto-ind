@@ -111,6 +111,8 @@ type InboundMessage struct {
 	Message   string    `json:"message"`
 	Timestamp time.Time `json:"timestamp"`
 	PushName  string    `json:"push_name,omitempty"`
+	SenderJID string    `json:"sender_jid,omitempty"`
+	ChatJID   string    `json:"chat_jid,omitempty"`
 }
 
 type QueueItem struct {
@@ -161,25 +163,26 @@ type StatusResponse struct {
 // ============================================================================
 
 type ServiceManager struct {
-	client          *whatsmeow.Client
-	container       *sqlstore.Container
-	ctx             context.Context
-	pairMu          sync.Mutex
-	pairing         bool
-	config          AntiBanConfig
-	cfgMu           sync.RWMutex
-	queue           []*QueueItem
-	queueMu         sync.RWMutex
-	inboundMessages []InboundMessage
-	inboundMu       sync.RWMutex
-	lidToPhone      map[string]string
-	lidMu           sync.RWMutex
-	notifyCh        chan struct{}
-	qrCodeRaw       string
-	qrCodeBase64    string
-	qrMu            sync.RWMutex
-	seenInboundIDs  map[string]time.Time
-	seenInboundMu   sync.Mutex
+	client                *whatsmeow.Client
+	container             *sqlstore.Container
+	ctx                   context.Context
+	pairMu                sync.Mutex
+	pairing               bool
+	config                AntiBanConfig
+	cfgMu                 sync.RWMutex
+	dispatchedPhonesToday map[string]bool
+	queue                 []*QueueItem
+	queueMu               sync.RWMutex
+	inboundMessages       []InboundMessage
+	inboundMu             sync.RWMutex
+	lidToPhone            map[string]string
+	lidMu                 sync.RWMutex
+	notifyCh              chan struct{}
+	qrCodeRaw             string
+	qrCodeBase64          string
+	qrMu                  sync.RWMutex
+	seenInboundIDs        map[string]time.Time
+	seenInboundMu         sync.Mutex
 }
 
 var appManager *ServiceManager
@@ -243,8 +246,43 @@ func (s *ServiceManager) checkMidnightReset() {
 			s.config.SentToday, s.config.LastResetDate, today)
 		s.config.SentToday = 0
 		s.config.LastResetDate = today
+		s.dispatchedPhonesToday = make(map[string]bool)
 		saveConfig(s.config)
 	}
+}
+
+func phoneKey(raw string) string {
+	d := digitsOnly(raw)
+	if len(d) >= 8 {
+		return d[len(d)-8:]
+	}
+	return d
+}
+
+func (s *ServiceManager) isPhoneDispatchedToday(phone string) bool {
+	key := phoneKey(phone)
+	if key == "" {
+		return false
+	}
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	if s.dispatchedPhonesToday == nil {
+		return false
+	}
+	return s.dispatchedPhonesToday[key]
+}
+
+func (s *ServiceManager) markPhoneDispatchedToday(phone string) {
+	key := phoneKey(phone)
+	if key == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if s.dispatchedPhonesToday == nil {
+		s.dispatchedPhonesToday = make(map[string]bool)
+	}
+	s.dispatchedPhonesToday[key] = true
 }
 
 // ============================================================================
@@ -373,14 +411,20 @@ func (s *ServiceManager) resolveSenderPhone(evt *events.Message) string {
 	// 2. Se SenderAlt traz o número @s.whatsapp.net (padrão WhatsApp Multi-Device quando Sender é @lid)
 	if evt.Info.SenderAlt.Server == types.DefaultUserServer && evt.Info.SenderAlt.User != "" {
 		s.rememberPhoneForJID(evt.Info.Sender, evt.Info.SenderAlt.User)
+		s.rememberPhoneForJID(evt.Info.Chat, evt.Info.SenderAlt.User)
 		return evt.Info.SenderAlt.User
 	}
-	// 3. Se Chat traz o número @s.whatsapp.net
+	// 3. Se RecipientAlt traz o número @s.whatsapp.net
+	if evt.Info.RecipientAlt.Server == types.DefaultUserServer && evt.Info.RecipientAlt.User != "" {
+		s.rememberPhoneForJID(evt.Info.Sender, evt.Info.RecipientAlt.User)
+		return evt.Info.RecipientAlt.User
+	}
+	// 4. Se Chat traz o número @s.whatsapp.net
 	if evt.Info.Chat.Server == types.DefaultUserServer && evt.Info.Chat.User != "" {
 		s.rememberPhoneForJID(evt.Info.Sender, evt.Info.Chat.User)
 		return evt.Info.Chat.User
 	}
-	// 4. Consulta cache em memória (mapeado durante resolveRecipientJID)
+	// 5. Consulta cache em memória (mapeado durante resolveRecipientJID)
 	s.lidMu.RLock()
 	if mapped, ok := s.lidToPhone[evt.Info.Sender.User]; ok && mapped != "" {
 		s.lidMu.RUnlock()
@@ -392,7 +436,7 @@ func (s *ServiceManager) resolveSenderPhone(evt *events.Message) string {
 	}
 	s.lidMu.RUnlock()
 
-	// 5. Consulta Store de LIDs do Whatsmeow
+	// 6. Consulta Store de LIDs do Whatsmeow (GetAltJID + Store.LIDs.GetPNForLID)
 	if s.client != nil && s.client.Store != nil {
 		if alt, err := s.client.Store.GetAltJID(s.ctx, evt.Info.Sender); err == nil && alt.Server == types.DefaultUserServer && alt.User != "" {
 			s.rememberPhoneForJID(evt.Info.Sender, alt.User)
@@ -402,6 +446,43 @@ func (s *ServiceManager) resolveSenderPhone(evt *events.Message) string {
 			s.rememberPhoneForJID(evt.Info.Chat, alt.User)
 			return alt.User
 		}
+		if s.client.Store.LIDs != nil {
+			if pn, err := s.client.Store.LIDs.GetPNForLID(s.ctx, evt.Info.Sender.ToNonAD()); err == nil && !pn.IsEmpty() && pn.User != "" {
+				s.rememberPhoneForJID(evt.Info.Sender, pn.User)
+				return pn.User
+			}
+			if pn, err := s.client.Store.LIDs.GetPNForLID(s.ctx, evt.Info.Chat.ToNonAD()); err == nil && !pn.IsEmpty() && pn.User != "" {
+				s.rememberPhoneForJID(evt.Info.Chat, pn.User)
+				return pn.User
+			}
+		}
+	}
+
+	// 7. Fallback inteligente: se a resposta veio de um @lid não mapeado, verifica se há apenas 1 contato
+	// recente na fila de disparos (nas últimas 4 horas) para vincular automaticamente
+	s.queueMu.RLock()
+	recentPhones := make(map[string]string)
+	var latestPhone string
+	var latestTime time.Time
+	for _, it := range s.queue {
+		if it.Status == "sent" && it.SentAt != nil && time.Since(*it.SentAt) < 4*time.Hour {
+			k := phoneKey(it.Phone)
+			if k != "" {
+				recentPhones[k] = digitsOnly(it.Phone)
+				if it.SentAt.After(latestTime) {
+					latestTime = *it.SentAt
+					latestPhone = digitsOnly(it.Phone)
+				}
+			}
+		}
+	}
+	s.queueMu.RUnlock()
+
+	if len(recentPhones) == 1 && latestPhone != "" {
+		log.Printf("🔗 [LID Resolver] Vinculando @lid %s ao único contato disparado recentemente: %s", evt.Info.Sender, latestPhone)
+		s.rememberPhoneForJID(evt.Info.Sender, latestPhone)
+		s.rememberPhoneForJID(evt.Info.Chat, latestPhone)
+		return latestPhone
 	}
 
 	return evt.Info.Sender.User
@@ -443,6 +524,14 @@ func (s *ServiceManager) resolveRecipientJID(ctx context.Context, rawPhone strin
 
 	// Salva mapeamento reverso LID -> Telefone para identificar respostas recebidas de @lid
 	s.rememberPhoneForJID(item.JID, cleanPhone)
+
+	// Também consulta Store.LIDs para mapear eventual LID associado a este número
+	if s.client != nil && s.client.Store != nil && s.client.Store.LIDs != nil {
+		pnJID := types.NewJID(cleanPhone, types.DefaultUserServer)
+		if lid, err := s.client.Store.LIDs.GetLIDForPN(ctx, pnJID); err == nil && !lid.IsEmpty() {
+			s.rememberPhoneForJID(lid, cleanPhone)
+		}
+	}
 
 	// 🛡️ REGRA CRÍTICA ANTI-LID:
 	// Se a resposta trouxer um JID com server @lid, NUNCA enviar para ele!
@@ -711,13 +800,15 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 	cfg := s.config
 	s.cfgMu.RUnlock()
 
-	// 1. Verificação de Limite Diário (apenas para disparos de prospecção fria; respostas da IA não são bloqueadas)
-	if !item.IsReply && cfg.SentToday >= cfg.DailyLimit {
+	alreadyCountedToday := s.isPhoneDispatchedToday(item.Phone)
+
+	// 1. Verificação de Limite Diário (1 Lead = 1 Disparo: não bloqueia 2º balão do mesmo lead nem respostas da IA)
+	if !item.IsReply && !alreadyCountedToday && cfg.SentToday >= cfg.DailyLimit {
 		log.Printf("🛑 [Limite Atingido] %d/%d disparos hoje. Mensagem %s marcada como limit_reached.",
 			cfg.SentToday, cfg.DailyLimit, item.ID)
 		s.queueMu.Lock()
 		item.Status = "limit_reached"
-		item.Error = fmt.Sprintf("Limite diário de %d mensagens atingido para hoje (%s). Aguardando reset.",
+		item.Error = fmt.Sprintf("Limite diário de %d leads atingido para hoje (%s). Aguardando reset.",
 			cfg.DailyLimit, cfg.LastResetDate)
 		s.queueMu.Unlock()
 		return
@@ -812,15 +903,18 @@ func (s *ServiceManager) processQueueItem(ctx context.Context, item *QueueItem) 
 	item.SentAt = &now
 	s.queueMu.Unlock()
 
-	// 7. Incrementa contador apenas para disparos de prospecção (não para respostas da IA)
-	s.cfgMu.Lock()
-	if !item.IsReply {
+	// 7. Incrementa contador apenas 1 vez por lead/telefone único por dia (1 Lead = 1 Disparo; respostas da IA não contam)
+	if !item.IsReply && !s.isPhoneDispatchedToday(item.Phone) {
+		s.markPhoneDispatchedToday(item.Phone)
+		s.cfgMu.Lock()
 		s.config.SentToday++
 		saveConfig(s.config)
+		s.cfgMu.Unlock()
 	}
+	s.cfgMu.RLock()
 	currentSent := s.config.SentToday
 	dailyLimit := s.config.DailyLimit
-	s.cfgMu.Unlock()
+	s.cfgMu.RUnlock()
 
 	log.Printf("✅ [Sucesso] Mensagem %s enviada com ID WhatsApp: %s (Total hoje: %d/%d)",
 		item.ID, sendResp.ID, currentSent, dailyLimit)
@@ -1443,6 +1537,9 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, ok := updates["sent_today"].(float64); ok && v >= 0 {
 			appManager.config.SentToday = int(v)
+			if int(v) == 0 {
+				appManager.dispatchedPhonesToday = make(map[string]bool)
+			}
 		}
 		if v, ok := updates["webhook_url"].(string); ok {
 			appManager.config.WebhookURL = strings.TrimSpace(v)
@@ -1528,6 +1625,99 @@ func (s *ServiceManager) clearQR() {
 	s.qrMu.Unlock()
 }
 
+func extractMessageText(msg *waE2E.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
+		if t := extractMessageText(msg.EphemeralMessage.Message); t != "" {
+			return t
+		}
+	}
+	if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
+		if t := extractMessageText(msg.ViewOnceMessage.Message); t != "" {
+			return t
+		}
+	}
+	if msg.ViewOnceMessageV2 != nil && msg.ViewOnceMessageV2.Message != nil {
+		if t := extractMessageText(msg.ViewOnceMessageV2.Message); t != "" {
+			return t
+		}
+	}
+	if msg.DocumentWithCaptionMessage != nil && msg.DocumentWithCaptionMessage.Message != nil {
+		if t := extractMessageText(msg.DocumentWithCaptionMessage.Message); t != "" {
+			return t
+		}
+	}
+	if msg.DeviceSentMessage != nil && msg.DeviceSentMessage.Message != nil {
+		if t := extractMessageText(msg.DeviceSentMessage.Message); t != "" {
+			return t
+		}
+	}
+	if msg.EditedMessage != nil && msg.EditedMessage.Message != nil {
+		if t := extractMessageText(msg.EditedMessage.Message); t != "" {
+			return t
+		}
+	}
+	if msg.Conversation != nil && *msg.Conversation != "" {
+		return *msg.Conversation
+	}
+	if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil && *msg.ExtendedTextMessage.Text != "" {
+		return *msg.ExtendedTextMessage.Text
+	}
+	if msg.ImageMessage != nil && msg.ImageMessage.Caption != nil && *msg.ImageMessage.Caption != "" {
+		return *msg.ImageMessage.Caption
+	}
+	if msg.VideoMessage != nil && msg.VideoMessage.Caption != nil && *msg.VideoMessage.Caption != "" {
+		return *msg.VideoMessage.Caption
+	}
+	if msg.DocumentMessage != nil && msg.DocumentMessage.Caption != nil && *msg.DocumentMessage.Caption != "" {
+		return *msg.DocumentMessage.Caption
+	}
+	if msg.ListResponseMessage != nil && msg.ListResponseMessage.Title != nil {
+		return *msg.ListResponseMessage.Title
+	}
+	if msg.TemplateButtonReplyMessage != nil && msg.TemplateButtonReplyMessage.SelectedDisplayText != nil {
+		return *msg.TemplateButtonReplyMessage.SelectedDisplayText
+	}
+	return ""
+}
+
+func (s *ServiceManager) getWebhookTargetURLs() []string {
+	s.cfgMu.RLock()
+	cfgWebhook := strings.TrimSpace(s.config.WebhookURL)
+	cfgAppURL := strings.TrimRight(strings.TrimSpace(s.config.AppURL), "/")
+	s.cfgMu.RUnlock()
+
+	seen := make(map[string]bool)
+	var urls []string
+	addURL := func(u string) {
+		u = strings.TrimSpace(u)
+		if u == "" || (!strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://")) {
+			return
+		}
+		if !seen[u] {
+			seen[u] = true
+			urls = append(urls, u)
+		}
+	}
+
+	if cfgWebhook != "" {
+		addURL(cfgWebhook)
+	}
+	if cfgAppURL != "" {
+		addURL(cfgAppURL + "/api/whatsapp/webhook")
+	}
+	if envW := os.Getenv("WEBHOOK_URL"); envW != "" {
+		addURL(envW)
+	}
+	if envApp := os.Getenv("APP_URL"); envApp != "" {
+		addURL(strings.TrimRight(strings.TrimSpace(envApp), "/") + "/api/whatsapp/webhook")
+	}
+	addURL("http://localhost:3000/api/whatsapp/webhook")
+	return urls
+}
+
 func (s *ServiceManager) handleEvent(rawEvt any) {
 	switch evt := rawEvt.(type) {
 	case *events.Connected:
@@ -1545,32 +1735,17 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 	case *events.Message:
 		chatStr := evt.Info.Chat.String()
 		senderStr := evt.Info.Sender.String()
-		chatDigits := digitsOnly(evt.Info.Chat.User)
-		senderDigits := digitsOnly(evt.Info.Sender.User)
 
+		// Bloqueia apenas mensagens enviadas por nós mesmos, grupos, comunidades e canais (permite @lid e @s.whatsapp.net)
 		if evt.Info.IsFromMe || evt.Info.IsGroup ||
 			evt.Info.Chat.Server == "g.us" || evt.Info.Chat.Server == "broadcast" || evt.Info.Chat.Server == "newsletter" ||
 			evt.Info.Sender.Server == "g.us" ||
 			strings.Contains(chatStr, "@g.us") || strings.Contains(senderStr, "@g.us") ||
-			strings.HasPrefix(evt.Info.Chat.User, "120363") || strings.HasPrefix(evt.Info.Sender.User, "120363") ||
-			len(chatDigits) > 15 || len(senderDigits) > 15 {
+			strings.HasPrefix(evt.Info.Chat.User, "120363") || strings.HasPrefix(evt.Info.Sender.User, "120363") {
 			return
 		}
 
-		var text string
-		if msg := evt.Message; msg != nil {
-			if msg.Conversation != nil {
-				text = *msg.Conversation
-			} else if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil {
-				text = *msg.ExtendedTextMessage.Text
-			} else if msg.ImageMessage != nil && msg.ImageMessage.Caption != nil {
-				text = *msg.ImageMessage.Caption
-			} else if msg.DocumentMessage != nil && msg.DocumentMessage.Caption != nil {
-				text = *msg.DocumentMessage.Caption
-			}
-		}
-
-		text = strings.TrimSpace(text)
+		text := strings.TrimSpace(extractMessageText(evt.Message))
 		if text == "" {
 			return
 		}
@@ -1600,10 +1775,10 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 			msgID = fmt.Sprintf("inb_%d", time.Now().UnixNano())
 		}
 
-		log.Printf("📩 [WhatsApp Inbound] Mensagem recebida de %s (ID: %s, Sender: %s, Chat: %s): %s",
-			senderPhone, msgID, evt.Info.Sender, evt.Info.Chat, text)
+		log.Printf("📩 [WhatsApp Inbound] Mensagem recebida de %s (ID: %s, PushName: %s, Sender: %s, Chat: %s): %s",
+			senderPhone, msgID, evt.Info.PushName, evt.Info.Sender, evt.Info.Chat, text)
 
-		// Armazena no buffer em memória para polling seguro pelo Next.js
+		// Armazena no buffer em memória para polling seguro pelo Next.js (/api/inbound)
 		s.inboundMu.Lock()
 		s.inboundMessages = append(s.inboundMessages, InboundMessage{
 			ID:        msgID,
@@ -1611,48 +1786,45 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 			Message:   text,
 			Timestamp: time.Now(),
 			PushName:  evt.Info.PushName,
+			SenderJID: evt.Info.Sender.String(),
+			ChatJID:   evt.Info.Chat.String(),
 		})
 		if len(s.inboundMessages) > 200 {
 			s.inboundMessages = s.inboundMessages[len(s.inboundMessages)-200:]
 		}
 		s.inboundMu.Unlock()
 
-		s.cfgMu.RLock()
-		webhookURL := s.config.WebhookURL
-		s.cfgMu.RUnlock()
-		if webhookURL == "" {
-			webhookURL = os.Getenv("WEBHOOK_URL")
-		}
-		if webhookURL == "" {
-			webhookURL = "http://localhost:3000/api/whatsapp/webhook"
-		}
-
-		go func(phone, msgText, url string) {
+		webhookTargets := s.getWebhookTargetURLs()
+		go func(phone, msgText, pushName, senderJID, chatJID string, targets []string) {
 			payload, err := json.Marshal(map[string]string{
-				"phone":   phone,
-				"message": msgText,
+				"phone":      phone,
+				"message":    msgText,
+				"push_name":  pushName,
+				"sender_jid": senderJID,
+				"chat_jid":   chatJID,
 			})
 			if err != nil {
 				return
 			}
 
-			req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
-			if err != nil {
-				log.Printf("⚠️ Erro ao criar requisição de webhook: %v", err)
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-
 			client := &http.Client{Timeout: 8 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Printf("⚠️ Falha ao notificar webhook em %s: %v", url, err)
-				return
+			for _, url := range targets {
+				req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := client.Do(req)
+				if err != nil {
+					continue
+				}
+				_ = resp.Body.Close()
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					log.Printf("📨 [Webhook] Mensagem de %s entregue ao webhook %s (Status: %d)", phone, url, resp.StatusCode)
+					break
+				}
 			}
-			defer resp.Body.Close()
-
-			log.Printf("📨 [Webhook] Mensagem de %s entregue ao webhook (Status: %d)", phone, resp.StatusCode)
-		}(senderPhone, text, webhookURL)
+		}(senderPhone, text, evt.Info.PushName, evt.Info.Sender.String(), evt.Info.Chat.String(), webhookTargets)
 	}
 }
 

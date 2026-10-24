@@ -193,6 +193,22 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     max_typing_sec: 15,
     sent_today: 0,
   });
+  const [antiBanDrafts, setAntiBanDrafts] = useState<Record<string, string>>({});
+  const [settingsDrafts, setSettingsDrafts] = useState<Record<string, string>>({});
+  const showAntiBanPanelRef = useRef(false);
+  const isAntiBanDirtyRef = useRef(false);
+  const [waServiceStatus, setWaServiceStatus] = useState<{
+    connected?: boolean;
+    logged_in?: boolean;
+    inbound_count?: number;
+    sent_today?: number;
+    daily_limit?: number;
+  } | null>(null);
+  const [copiedTermuxCmd, setCopiedTermuxCmd] = useState(false);
+
+  useEffect(() => {
+    showAntiBanPanelRef.current = showAntiBanPanel;
+  }, [showAntiBanPanel]);
 
   // Filtro de status do Kanban
   const [activeKanbanTab, setActiveKanbanTab] = useState<AutomationLeadStatus | 'all'>('all');
@@ -215,6 +231,9 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         setMetrics(data.metrics);
         setLeads(data.leads || []);
         setLogs(data.logs || []);
+        if (data.whatsapp_status) {
+          setWaServiceStatus(data.whatsapp_status);
+        }
         if (data.next_schedule) {
           setNextSchedule(data.next_schedule);
           if (data.next_schedule.countdown_seconds !== undefined) {
@@ -227,6 +246,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         }
         if (!isSettingsOpen && data.settings) {
           setEditSettings(data.settings);
+          setSettingsDrafts({});
         }
       }
     } catch (e) {
@@ -236,13 +256,21 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   }, [isSettingsOpen]);
 
-  // Carrega regras anti-ban diretamente do microserviço Go
-  const fetchAntiBanConfig = useCallback(async () => {
+  // Carrega regras anti-ban diretamente do microserviço Go (sem sobrescrever edição aberta do usuário)
+  const fetchAntiBanConfig = useCallback(async (forceOverwrite = false) => {
     try {
       const res = await fetch('/api/whatsapp/config', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        setAntiBanConfig(prev => ({ ...prev, ...data }));
+        setAntiBanConfig(prev => {
+          if (!forceOverwrite && (showAntiBanPanelRef.current || isAntiBanDirtyRef.current)) {
+            return {
+              ...prev,
+              sent_today: typeof data.sent_today === 'number' ? data.sent_today : prev.sent_today,
+            };
+          }
+          return { ...prev, ...data };
+        });
       }
     } catch (e) {
       console.error('Falha ao carregar configurações anti-ban:', e);
@@ -252,10 +280,10 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
   // Polling automático
   useEffect(() => {
     fetchStatus();
-    fetchAntiBanConfig();
+    fetchAntiBanConfig(true);
     const interval = setInterval(() => {
       fetchStatus();
-      fetchAntiBanConfig();
+      fetchAntiBanConfig(false);
     }, 6000);
     return () => clearInterval(interval);
   }, [fetchStatus, fetchAntiBanConfig]);
@@ -604,41 +632,99 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   };
 
-  // Salvar regras anti-ban e digitação no microserviço Go
-  const handleSaveAntiBanConfig = async () => {
-    soundEngine.playMechanicalClick('primary');
+  // Persiste regras anti-ban no microserviço Go e sincroniza daily_limit com a automação
+  const persistAntiBanToBackend = async (cfgToSave: typeof antiBanConfig, customMessage?: string) => {
     setIsSavingAntiBan(true);
-    setAntiBanSuccessMsg('');
-
     try {
       const res = await fetch('/api/whatsapp/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(antiBanConfig),
+        body: JSON.stringify(cfgToSave),
       });
 
-      if (res.ok) {
-        soundEngine.playSentNotification();
-        setAntiBanSuccessMsg('Regras de Anti-Ban e Digitação ativas no microserviço!');
-        
-        // Mantém também daily_limit sincronizado na automação
-        await fetch('/api/automation/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ daily_limit: antiBanConfig.daily_limit })
-        });
+      await fetch('/api/automation/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ daily_limit: cfgToSave.daily_limit })
+      }).catch(() => {});
 
+      if (res.ok) {
+        isAntiBanDirtyRef.current = false;
+        setAntiBanSuccessMsg(customMessage || 'Regras de Anti-Ban e Digitação salvas e ativas!');
         fetchStatus();
-        fetchAntiBanConfig();
         setTimeout(() => setAntiBanSuccessMsg(''), 4000);
       } else {
-        alert('Erro ao salvar configurações no microserviço WhatsApp.');
+        setAntiBanSuccessMsg('⚠️ Salvo localmente na automação (verifique a conexão do microserviço).');
+        setTimeout(() => setAntiBanSuccessMsg(''), 4000);
       }
     } catch (err: any) {
-      alert('Falha na comunicação com o microserviço: ' + err.message);
+      console.error('Falha ao salvar anti-ban:', err);
     } finally {
       setIsSavingAntiBan(false);
     }
+  };
+
+  // Helpers para edição livre de campos numéricos (permite apagar todos os dígitos sem travar no '1')
+  const getAntiBanInputValue = (field: keyof typeof antiBanConfig) => {
+    if (antiBanDrafts[field] !== undefined) return antiBanDrafts[field];
+    return String(antiBanConfig[field]);
+  };
+
+  const handleAntiBanNumberChange = (field: keyof typeof antiBanConfig, rawValue: string) => {
+    isAntiBanDirtyRef.current = true;
+    setAntiBanDrafts(prev => ({ ...prev, [field]: rawValue }));
+    if (rawValue.trim() === '') return;
+    const parsed = Number(rawValue);
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      setAntiBanConfig(prev => ({ ...prev, [field]: parsed }));
+    }
+  };
+
+  const handleAntiBanNumberBlur = (field: keyof typeof antiBanConfig, minVal: number, maxVal: number) => {
+    const raw = antiBanDrafts[field];
+    setAntiBanDrafts(prev => {
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+
+    setAntiBanConfig(prev => {
+      const parsed = raw !== undefined && raw.trim() !== '' ? Number(raw) : prev[field];
+      const safeNum = Number.isNaN(parsed) ? minVal : Math.min(maxVal, Math.max(minVal, Math.round(parsed)));
+      const updated = { ...prev, [field]: safeNum };
+
+      if (field === 'min_delay_sec' && updated.max_delay_sec < safeNum) {
+        updated.max_delay_sec = safeNum;
+      }
+      if (field === 'max_delay_sec' && safeNum < updated.min_delay_sec) {
+        updated.max_delay_sec = updated.min_delay_sec;
+      }
+      if (field === 'min_typing_sec' && updated.max_typing_sec < safeNum) {
+        updated.max_typing_sec = safeNum;
+      }
+      if (field === 'max_typing_sec' && safeNum < updated.min_typing_sec) {
+        updated.max_typing_sec = updated.min_typing_sec;
+      }
+      return updated;
+    });
+  };
+
+  // Salvar regras anti-ban e digitação no microserviço Go
+  const handleSaveAntiBanConfig = async () => {
+    soundEngine.playMechanicalClick('primary');
+    setAntiBanDrafts({});
+    const normalized = {
+      ...antiBanConfig,
+      daily_limit: Math.max(1, Number(antiBanConfig.daily_limit) || 10),
+      min_delay_sec: Math.max(1, Number(antiBanConfig.min_delay_sec) || 30),
+      max_delay_sec: Math.max(Number(antiBanConfig.min_delay_sec) || 30, Number(antiBanConfig.max_delay_sec) || 70),
+      typing_speed_ms: Math.max(20, Number(antiBanConfig.typing_speed_ms) || 150),
+      min_typing_sec: Math.max(1, Number(antiBanConfig.min_typing_sec) || 3),
+      max_typing_sec: Math.max(Number(antiBanConfig.min_typing_sec) || 3, Number(antiBanConfig.max_typing_sec) || 15),
+    };
+    setAntiBanConfig(normalized);
+    await persistAntiBanToBackend(normalized, '✅ Regras de Anti-Ban e Digitação salvas e ativas no microserviço!');
+    soundEngine.playSentNotification();
   };
 
   // Resetar contador diário de disparos
@@ -655,7 +741,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         setAntiBanConfig(prev => ({ ...prev, sent_today: 0 }));
         setAntiBanSuccessMsg('Contador diário de disparos zerado!');
         fetchStatus();
-        fetchAntiBanConfig();
         setTimeout(() => setAntiBanSuccessMsg(''), 3000);
       }
     } catch (err: any) {
@@ -663,50 +748,62 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   };
 
-  // Presets de Anti-Ban
-  const applyPreset = (preset: 'safe' | 'medium' | 'fast' | 'test') => {
+  // Presets de Anti-Ban (aplicam e salvam imediatamente para nunca voltar sozinho)
+  const applyPreset = async (preset: 'safe' | 'medium' | 'fast' | 'test') => {
     soundEngine.playMechanicalClick('secondary');
+    isAntiBanDirtyRef.current = true;
+    setAntiBanDrafts({});
+
+    let nextCfg = { ...antiBanConfig };
+    let presetLabel = '';
     if (preset === 'safe') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      presetLabel = '🛡️ Preset Ultra Seguro aplicado e salvo!';
+      nextCfg = {
+        ...antiBanConfig,
         daily_limit: 15,
         min_delay_sec: 40,
         max_delay_sec: 80,
         typing_speed_ms: 180,
         min_typing_sec: 4,
         max_typing_sec: 20,
-      }));
+      };
     } else if (preset === 'medium') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      presetLabel = '⚖️ Preset Equilibrado aplicado e salvo!';
+      nextCfg = {
+        ...antiBanConfig,
         daily_limit: 30,
         min_delay_sec: 25,
         max_delay_sec: 50,
         typing_speed_ms: 140,
         min_typing_sec: 3,
         max_typing_sec: 15,
-      }));
+      };
     } else if (preset === 'fast') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      presetLabel = '⚡ Preset Acelerado aplicado e salvo!';
+      nextCfg = {
+        ...antiBanConfig,
         daily_limit: 60,
         min_delay_sec: 15,
         max_delay_sec: 30,
         typing_speed_ms: 90,
         min_typing_sec: 2,
         max_typing_sec: 8,
-      }));
+      };
     } else if (preset === 'test') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      presetLabel = '🧪 Preset Teste Rápido aplicado e salvo!';
+      nextCfg = {
+        ...antiBanConfig,
         daily_limit: 100,
         min_delay_sec: 4,
         max_delay_sec: 8,
         typing_speed_ms: 50,
         min_typing_sec: 2,
         max_typing_sec: 5,
-      }));
+      };
     }
+
+    setAntiBanConfig(nextCfg);
+    await persistAntiBanToBackend(nextCfg, presetLabel);
   };
 
   // Estimativa de tempo de digitação da mensagem inicial da automação
@@ -882,20 +979,48 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   };
 
-  const filteredLeads = leads.filter(lead => {
-    if (activeKanbanTab === 'all') return true;
-    return lead.status === activeKanbanTab;
-  });
+  // Critério unificado de estágios do pipeline (garante 100% de consistência entre os cards, badges e abas)
+  const matchesKanbanStage = useCallback((lead: AutomationLead, stage: AutomationLeadStatus | 'all') => {
+    if (stage === 'all') return true;
+    const isDisq = lead.status === 'disqualified' || lead.interest_level === 'none';
+    const isQual = !isDisq && (lead.status === 'qualified' || lead.interest_level === 'high');
+    const isChat = !isDisq && !isQual && (lead.status === 'chatting' || Boolean(lead.last_reply_at));
+    const isSentOnly = !isDisq && !isQual && !isChat && lead.status === 'sent';
+    const isPending = lead.status === 'pending';
+
+    if (stage === 'pending') return isPending;
+    if (stage === 'sent') return isSentOnly;
+    if (stage === 'chatting') return isChat;
+    if (stage === 'qualified') return isQual;
+    if (stage === 'disqualified') return isDisq;
+    return lead.status === stage;
+  }, []);
+
+  const filteredLeads = useMemo(
+    () => leads.filter(lead => matchesKanbanStage(lead, activeKanbanTab)),
+    [leads, activeKanbanTab, matchesKanbanStage]
+  );
+
+  // Contadores consolidados em tempo real (1 Lead = 1 Disparo)
+  const pendingCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'pending')).length, [leads, matchesKanbanStage]);
+  const sentWaitCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'sent')).length, [leads, matchesKanbanStage]);
+  const chattingCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'chatting')).length, [leads, matchesKanbanStage]);
+  const qualifiedCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'qualified')).length, [leads, matchesKanbanStage]);
+  const disqualifiedCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'disqualified')).length, [leads, matchesKanbanStage]);
+  const totalRepliedCount = chattingCount + qualifiedCount;
+  const leadsDispatchedToday = metrics?.dispatchedToday ?? 0;
+  const dailyQuota = settings?.daily_limit || antiBanConfig.daily_limit || 15;
+  const isLegacyTermuxBinary = Boolean(waServiceStatus?.connected && typeof waServiceStatus?.inbound_count === 'undefined');
 
   return (
-    <div className="space-y-6">
-      {/* 1. BARRA SUPERIOR MASTER DE CONTROLE */}
-      <div className="bg-zinc-950 border-4 border-zinc-950 p-4 sm:p-6 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B] text-zinc-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+    <div className="space-y-4 sm:space-y-6">
+      {/* 1. BARRA SUPERIOR MASTER DE CONTROLE (OTIMIZADA PARA MOBILE E DESKTOP) */}
+      <div className="bg-zinc-950 border-4 border-zinc-950 p-3.5 sm:p-6 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B] text-zinc-100 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 sm:gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
           <button
             onClick={toggleMasterSwitch}
             disabled={isLoading}
-            className={`px-5 py-3.5 font-mono font-black text-sm uppercase tracking-wider flex items-center gap-3 transition-all duration-150 border-2 border-zinc-950 shadow-[4px_4px_0_0_#000] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none cursor-pointer ${
+            className={`w-full sm:w-auto justify-center px-5 py-3.5 font-mono font-black text-sm uppercase tracking-wider flex items-center gap-3 transition-all duration-150 border-2 border-zinc-950 shadow-[4px_4px_0_0_#000] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none cursor-pointer shrink-0 ${
               settings?.is_active
                 ? 'bg-[#E5FF00] text-zinc-950 hover:bg-[#d8f000]'
                 : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
@@ -916,9 +1041,9 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             )}
           </button>
 
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <Bot className="w-4 h-4 text-[#E5FF00]" />
+              <Bot className="w-4 h-4 text-[#E5FF00] shrink-0" />
               <span className="font-mono text-xs font-black uppercase tracking-wider text-zinc-300">
                 Cadência Diária & IA SDR
               </span>
@@ -930,39 +1055,49 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                 {settings?.profile === 'sergio' ? '🏭 Sérgio // Sal Industrial' : '💻 Gustavo // Sites & SEO'}
               </span>
             </div>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Horário: <span className="text-zinc-200 font-mono font-bold">{settings?.start_hour || '09:00'} às {settings?.end_hour || '17:30'}</span> • Cota: <span className="text-[#E5FF00] font-mono font-bold">{settings?.daily_limit ?? antiBanConfig.daily_limit} disparos/dia</span> • Hoje: <span className="text-emerald-400 font-mono font-bold">{metrics?.dispatchedToday ?? antiBanConfig.sent_today} enviados</span>
-            </p>
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] sm:text-xs text-zinc-400 mt-1">
+              <span>
+                Horário: <strong className="text-zinc-200 font-mono">{settings?.start_hour || '09:00'} às {settings?.end_hour || '17:30'}</strong>
+              </span>
+              <span className="text-zinc-700">•</span>
+              <span>
+                Meta: <strong className="text-[#E5FF00] font-mono">{dailyQuota} leads/dia</strong>
+              </span>
+              <span className="text-zinc-700">•</span>
+              <span>
+                Hoje: <strong className="text-emerald-400 font-mono">{leadsDispatchedToday}/{dailyQuota} leads disparados</strong>
+              </span>
+            </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap">
-          {/* Botão Regras Anti-Ban (Idêntico ao painel do WhatsApp) */}
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-2.5 sm:flex-wrap w-full lg:w-auto">
+          {/* Botão Regras Anti-Ban */}
           <button
             type="button"
             onClick={() => {
               soundEngine.playMechanicalClick('secondary');
               setShowAntiBanPanel(prev => !prev);
             }}
-            className={`btn-tactile-4 px-4 py-2.5 border-2 font-mono text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+            className={`btn-tactile-4 px-3 sm:px-4 py-2.5 border-2 font-mono text-[11px] sm:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
               showAntiBanPanel
                 ? 'bg-[#E5FF00] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#fff]'
                 : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 hover:text-white'
             }`}
             title="Ajustar intervalos, digitação e limites anti-ban"
           >
-            <Sliders className="w-4 h-4" />
-            <span>{showAntiBanPanel ? 'Ocultar Anti-Ban' : 'Regras Anti-Ban'}</span>
+            <Sliders className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span className="truncate">{showAntiBanPanel ? 'Ocultar Anti-Ban' : 'Regras Anti-Ban'}</span>
           </button>
 
           <button
             onClick={handleRunCycleNow}
             disabled={isCycling}
-            className="px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-2 border-zinc-800 font-mono text-xs font-bold uppercase tracking-wide flex items-center gap-2 transition-colors active:scale-95 disabled:opacity-50 cursor-pointer"
-            title="Executa a busca de leads e disparo imediatamente sem esperar o cron"
+            className="px-3 sm:px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-2 border-zinc-800 font-mono text-[11px] sm:text-xs font-bold uppercase tracking-wide flex items-center justify-center gap-1.5 sm:gap-2 transition-colors active:scale-95 disabled:opacity-50 cursor-pointer"
+            title="Executa o próximo disparo imediatamente sem esperar o cron"
           >
-            <Zap className={`w-3.5 h-3.5 text-[#E5FF00] ${isCycling ? 'animate-spin' : ''}`} />
-            <span>{isCycling ? 'Executando...' : 'Rodar Ciclo Agora'}</span>
+            <Zap className={`w-3.5 h-3.5 text-[#E5FF00] shrink-0 ${isCycling ? 'animate-spin' : ''}`} />
+            <span className="truncate">{isCycling ? 'Executando...' : 'Rodar Ciclo'}</span>
           </button>
 
           <button
@@ -972,11 +1107,11 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                 window.dispatchEvent(new CustomEvent('leadcore:test-qualified-popup'));
               }
             }}
-            className="px-3.5 py-2.5 bg-[#25D366]/20 hover:bg-[#25D366] text-[#25D366] hover:text-zinc-950 border-2 border-[#25D366] font-mono text-xs font-black uppercase tracking-wide flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="px-3 sm:px-3.5 py-2.5 bg-[#25D366]/20 hover:bg-[#25D366] text-[#25D366] hover:text-zinc-950 border-2 border-[#25D366] font-mono text-[11px] sm:text-xs font-black uppercase tracking-wide flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             title="Disparar um Pop-up e Notificação Push de teste no seu celular"
           >
-            <Flame className="w-3.5 h-3.5" />
-            <span>Testar Pop-up</span>
+            <Flame className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Testar Pop-up</span>
           </button>
 
           <button
@@ -984,44 +1119,97 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
               soundEngine.playMechanicalClick('secondary');
               if (settings) {
                 setEditSettings({ ...settings });
+                setSettingsDrafts({});
               }
               setIsSettingsOpen(true);
             }}
-            className="px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-2 border-zinc-800 font-mono text-xs font-bold uppercase tracking-wide flex items-center gap-2 transition-colors active:scale-95 cursor-pointer"
+            className="px-3 sm:px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-2 border-zinc-800 font-mono text-[11px] sm:text-xs font-bold uppercase tracking-wide flex items-center justify-center gap-1.5 sm:gap-2 transition-colors active:scale-95 cursor-pointer"
           >
-            <SettingsIcon className="w-3.5 h-3.5 text-zinc-400" />
-            <span>Configurações</span>
+            <SettingsIcon className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+            <span className="truncate">Configurações</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              const next = soundEngine.toggleMute();
-              setIsSoundMuted(next);
-            }}
-            className={`p-2.5 border-2 flex items-center justify-center transition-all cursor-pointer ${
-              isSoundMuted
-                ? 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:text-white'
-                : 'bg-[#25D366] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#E5FF00]'
-            }`}
-            title={isSoundMuted ? 'Ativar Sound Design' : 'Silenciar Sound Design'}
-          >
-            {isSoundMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-          </button>
+          <div className="col-span-2 sm:col-span-1 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const next = soundEngine.toggleMute();
+                setIsSoundMuted(next);
+              }}
+              className={`flex-1 sm:flex-initial p-2.5 border-2 flex items-center justify-center gap-1.5 transition-all cursor-pointer font-mono text-[11px] font-bold uppercase ${
+                isSoundMuted
+                  ? 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:text-white'
+                  : 'bg-[#25D366] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#E5FF00]'
+              }`}
+              title={isSoundMuted ? 'Ativar Sound Design' : 'Silenciar Sound Design'}
+            >
+              {isSoundMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+              <span className="sm:hidden">{isSoundMuted ? 'Som Off' : 'Som On'}</span>
+            </button>
 
-          <button
-            onClick={() => {
-              soundEngine.playMechanicalClick('secondary');
-              fetchStatus();
-              fetchAntiBanConfig();
-            }}
-            className="p-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-2 border-zinc-800 transition-colors cursor-pointer"
-            title="Atualizar dados"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
+            <button
+              onClick={() => {
+                soundEngine.playMechanicalClick('secondary');
+                fetchStatus();
+                fetchAntiBanConfig(true);
+              }}
+              className="flex-1 sm:flex-initial p-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-2 border-zinc-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer font-mono text-[11px] font-bold uppercase"
+              title="Atualizar dados"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span className="sm:hidden">Atualizar</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* ALERTA DE ATUALIZAÇÃO DO MOTOR TERMUX QUANDO O BINÁRIO ANTIGO NÃO POSSUI ESCUTA DE RESPOSTAS (/api/inbound) */}
+      {isLegacyTermuxBinary && (
+        <div className="bg-amber-950/90 border-4 border-amber-400 p-4 shadow-[6px_6px_0_0_#18181B] font-mono text-xs text-amber-100 flex flex-col gap-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="font-black text-amber-300 uppercase tracking-wider text-xs sm:text-sm">
+                  ⚠️ Atualização Rápida do Motor Termux Necessária (Escuta Automática de Respostas IA SDR)
+                </h4>
+                <p className="text-[11px] text-amber-100/90 mt-1 leading-relaxed">
+                  Detectamos que o motor WhatsApp no seu celular está rodando a compilação antiga (de 18/10), que enviava mensagens mas ainda não tinha o receptor de respostas (<code className="bg-black/40 px-1 py-0.5 text-amber-300">/api/inbound</code>). Atualize o binário no Termux com 1 comando (sem perder a conexão do WhatsApp) ou clique em <strong>+ Registrar Resposta</strong> para testar a IA agora:
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+                  const cmd = `curl -L "${origin}/whatsapp-termux.tar.gz" -o whatsapp-termux.tar.gz && tar -xzvf whatsapp-termux.tar.gz && chmod +x whatsapp-service-linux-* && pm2 restart all`;
+                  navigator.clipboard.writeText(cmd);
+                  setCopiedTermuxCmd(true);
+                  setTimeout(() => setCopiedTermuxCmd(false), 4000);
+                }}
+                className="flex-1 sm:flex-initial px-3.5 py-2 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-black uppercase text-[11px] border-2 border-zinc-950 shadow-[2px_2px_0_0_#000] cursor-pointer"
+              >
+                {copiedTermuxCmd ? '✓ Comando Copiado! Cole no Termux' : '📋 Copiar Comando de Atualização Termux'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playMechanicalClick('secondary');
+                  const lastSentLead = leads.find(l => l.status === 'sent' || l.status === 'chatting');
+                  setRecordReplyForm({ phone: lastSentLead?.phone || '', message: '' });
+                  setIsRecordReplyModalOpen(true);
+                }}
+                className="flex-1 sm:flex-initial px-3.5 py-2 bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-black uppercase text-[11px] border-2 border-zinc-950 shadow-[2px_2px_0_0_#000] cursor-pointer"
+              >
+                💬 Responder / Testar IA Agora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* FEEDBACK DE EXECUÇÃO DO CICLO */}
       <AnimatePresence>
@@ -1084,14 +1272,14 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
       </AnimatePresence>
 
       {/* 1.2 CARD DE PRÓXIMO DISPARO PROGRAMADO & CONTAGEM REGRESSIVA */}
-      <div className="bg-zinc-950 border-4 border-zinc-950 p-4 sm:p-5 shadow-[8px_8px_0_0_#18181B] flex flex-col lg:flex-row lg:items-center justify-between gap-4 font-mono">
+      <div className="bg-zinc-950 border-4 border-zinc-950 p-3.5 sm:p-5 shadow-[6px_6px_0_0_#18181B] sm:shadow-[8px_8px_0_0_#18181B] flex flex-col lg:flex-row lg:items-center justify-between gap-4 font-mono">
         {/* Lado Esquerdo: Horário e Contagem Regressiva */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-zinc-900 border-2 border-zinc-800 flex items-center justify-center text-[#E5FF00] shrink-0">
-              <Clock className="w-6 h-6 animate-pulse" />
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="w-11 h-11 sm:w-12 sm:h-12 bg-zinc-900 border-2 border-zinc-800 flex items-center justify-center text-[#E5FF00] shrink-0">
+              <Clock className="w-5 h-5 sm:w-6 sm:h-6 animate-pulse" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">
                   ⏰ PROGRAMAÇÃO DO PRÓXIMO DISPARO
@@ -1105,11 +1293,11 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                 </span>
               </div>
               <div className="flex items-baseline gap-2 mt-0.5 flex-wrap">
-                <span className="text-2xl sm:text-3xl font-black text-[#E5FF00]">
+                <span className="text-xl sm:text-3xl font-black text-[#E5FF00]">
                   {nextSchedule?.formatted_time || '09:00:00'}
                 </span>
                 {liveCountdown !== null && liveCountdown > 0 && (
-                  <span className="text-sm font-bold text-zinc-300 bg-zinc-900 px-2 py-0.5 border border-zinc-800">
+                  <span className="text-xs sm:text-sm font-bold text-zinc-300 bg-zinc-900 px-2 py-0.5 border border-zinc-800">
                     (em {formattedCountdown})
                   </span>
                 )}
@@ -1122,14 +1310,14 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         </div>
 
         {/* Lado Direito: Próximo Lead na Fila e Ação Imediata */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 border-t lg:border-t-0 lg:border-l border-zinc-800 pt-3 lg:pt-0 lg:pl-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t lg:border-t-0 lg:border-l border-zinc-800 pt-3 lg:pt-0 lg:pl-6">
           {nextSchedule?.next_lead ? (
-            <div className="text-xs">
+            <div className="text-xs min-w-0">
               <span className="text-[10px] uppercase text-zinc-500 font-bold block">Próximo Contato na Fila:</span>
               <div className="font-bold text-zinc-100 line-clamp-1 mt-0.5">
                 {nextSchedule.next_lead.company_name}
               </div>
-              <div className="text-zinc-400 text-[11px] flex items-center gap-1.5 mt-0.5">
+              <div className="text-zinc-400 text-[11px] flex items-center gap-1.5 mt-0.5 flex-wrap">
                 <span>{formatPhoneDisplay(nextSchedule.next_lead.phone)}</span>
                 <span>•</span>
                 <span className="text-[#E5FF00]">{nextSchedule.next_lead.city || 'SP'}</span>
@@ -1141,15 +1329,15 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             </div>
           )}
 
-          <div className="flex items-center gap-2 mt-2 sm:mt-0 flex-wrap">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
             <button
               type="button"
               onClick={handleRunCycleNow}
               disabled={isCycling}
-              className="px-4 py-2.5 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono font-black text-xs uppercase border-2 border-zinc-950 shadow-[3px_3px_0_0_#fff] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-transform active:scale-95 shrink-0"
+              className="w-full sm:w-auto px-4 py-2.5 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono font-black text-xs uppercase border-2 border-zinc-950 shadow-[3px_3px_0_0_#fff] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-transform active:scale-95 shrink-0"
               title="Disparar imediatamente para o próximo lead sem aguardar a contagem regressiva"
             >
-              <Zap className="w-3.5 h-3.5 text-zinc-950 fill-zinc-950" />
+              <Zap className="w-3.5 h-3.5 text-zinc-950 fill-zinc-950 shrink-0" />
               <span>{isCycling ? 'Disparando...' : 'Pular Espera & Disparar Agora'}</span>
             </button>
 
@@ -1157,72 +1345,90 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
               type="button"
               onClick={() => {
                 soundEngine.playMechanicalClick('secondary');
+                const lastSentLead = leads.find(l => l.status === 'sent' || l.status === 'chatting');
+                setRecordReplyForm({ phone: lastSentLead?.phone || '', message: '' });
                 setIsRecordReplyModalOpen(true);
               }}
-              className="px-3 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-emerald-400 border-2 border-zinc-800 hover:border-emerald-600 font-mono text-xs font-bold uppercase flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+              className="w-full sm:w-auto px-3 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-emerald-400 border-2 border-zinc-800 hover:border-emerald-600 font-mono text-xs font-bold uppercase flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-colors"
               title="Registrar resposta recebida de um lead"
             >
-              <MessageSquare className="w-3.5 h-3.5" />
+              <MessageSquare className="w-3.5 h-3.5 shrink-0" />
               <span>+ Resposta</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* 2. PAINEL COMPLETO DE CONFIGURAÇÕES ANTI-BAN E DIGITAÇÃO (IDÊNTICO AO WHATSAPP PANEL) */}
+      {/* 2. PAINEL COMPLETO DE CONFIGURAÇÕES ANTI-BAN E DIGITAÇÃO (EDIÇÃO LIVRE E AUTO-SAVE DE PRESETS) */}
       <AnimatePresence>
         {showAntiBanPanel && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="bg-white border-4 border-zinc-950 p-6 md:p-8 shadow-[10px_10px_0_0_#18181B] flex flex-col gap-6 overflow-hidden"
+            className="bg-white border-4 border-zinc-950 p-4 sm:p-6 md:p-8 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B] flex flex-col gap-5 sm:gap-6 overflow-hidden"
           >
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b-4 border-zinc-950 pb-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 bg-[#E5FF00] border-2 border-zinc-950" />
-                  <span className="font-mono text-xs uppercase tracking-widest font-black text-zinc-600">
+                  <span className="w-3 h-3 bg-[#E5FF00] border-2 border-zinc-950 shrink-0" />
+                  <span className="font-mono text-[10px] sm:text-xs uppercase tracking-widest font-black text-zinc-600">
                     Painel de Controle Total Anti-Ban & Humanização // Automação
                   </span>
                 </div>
-                <h3 className="text-2xl md:text-3xl font-black uppercase text-zinc-950 mt-1">
+                <h3 className="text-xl sm:text-2xl md:text-3xl font-black uppercase text-zinc-950 mt-1">
                   Configurações de Espaçamento & Digitação
                 </h3>
               </div>
 
-              {/* Presets Rápidos */}
+              {/* Presets Rápidos (Aplicam e Salvam Imediatamente) */}
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-mono font-bold uppercase text-zinc-500">Presets:</span>
+                <span className="text-xs font-mono font-bold uppercase text-zinc-500 w-full sm:w-auto">Presets (Auto-Save):</span>
                 <button
                   type="button"
                   onClick={() => applyPreset('safe')}
-                  className="px-3 py-1.5 bg-zinc-100 hover:bg-[#25D366] hover:text-zinc-950 border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer"
-                  title="15 msgs/dia, 40-80s delay, 180ms/char"
+                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
+                    antiBanConfig.daily_limit === 15 && antiBanConfig.min_delay_sec === 40
+                      ? 'bg-[#25D366] text-zinc-950 shadow-[2px_2px_0_0_#000] font-black'
+                      : 'bg-zinc-100 hover:bg-[#25D366] hover:text-zinc-950'
+                  }`}
+                  title="15 leads/dia, 40-80s delay, 180ms/char"
                 >
                   🛡️ Ultra Seguro
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset('medium')}
-                  className="px-3 py-1.5 bg-zinc-100 hover:bg-[#E5FF00] border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer"
-                  title="30 msgs/dia, 25-50s delay, 140ms/char"
+                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
+                    antiBanConfig.daily_limit === 30 && antiBanConfig.min_delay_sec === 25
+                      ? 'bg-[#E5FF00] text-zinc-950 shadow-[2px_2px_0_0_#000] font-black'
+                      : 'bg-zinc-100 hover:bg-[#E5FF00]'
+                  }`}
+                  title="30 leads/dia, 25-50s delay, 140ms/char"
                 >
                   ⚖️ Equilibrado
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset('fast')}
-                  className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-950 hover:text-white border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer"
-                  title="60 msgs/dia, 15-30s delay, 90ms/char"
+                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
+                    antiBanConfig.daily_limit === 60 && antiBanConfig.min_delay_sec === 15
+                      ? 'bg-zinc-950 text-[#E5FF00] shadow-[2px_2px_0_0_#25D366] font-black'
+                      : 'bg-zinc-100 hover:bg-zinc-950 hover:text-white'
+                  }`}
+                  title="60 leads/dia, 15-30s delay, 90ms/char"
                 >
                   ⚡ Acelerado
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset('test')}
-                  className="px-3 py-1.5 bg-amber-200 hover:bg-amber-300 text-amber-950 border-2 border-zinc-950 font-mono text-xs font-black uppercase transition-all cursor-pointer"
-                  title="100 msgs/dia, 4-8s delay, 50ms/char (para testes rápidos)"
+                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-black uppercase transition-all cursor-pointer ${
+                    antiBanConfig.daily_limit === 100 && antiBanConfig.min_delay_sec === 4
+                      ? 'bg-amber-400 text-zinc-950 shadow-[2px_2px_0_0_#000]'
+                      : 'bg-amber-200 hover:bg-amber-300 text-amber-950'
+                  }`}
+                  title="100 leads/dia, 4-8s delay, 50ms/char (para testes rápidos)"
                 >
                   🧪 Teste Rápido
                 </button>
@@ -1232,13 +1438,13 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             {/* Feedback de Sucesso */}
             {antiBanSuccessMsg && (
               <div className="p-3 bg-emerald-100 border-2 border-emerald-600 text-emerald-900 font-mono text-xs font-bold flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                {antiBanSuccessMsg}
+                <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                <span>{antiBanSuccessMsg}</span>
               </div>
             )}
 
             {/* Grid dos 3 Blocos de Configuração */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
               
               {/* Bloco 1: Espaçamento de Segurança */}
               <div className="bg-zinc-50 border-2 border-zinc-950 p-4 flex flex-col gap-4">
@@ -1259,18 +1465,13 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                       <div className="flex items-center gap-1">
                         <input
                           type="number"
+                          inputMode="numeric"
                           min={1}
                           max={180}
-                          value={antiBanConfig.min_delay_sec}
-                          onChange={(e) => {
-                            const val = Math.max(1, Number(e.target.value));
-                            setAntiBanConfig(prev => ({
-                              ...prev,
-                              min_delay_sec: val,
-                              max_delay_sec: Math.max(val, prev.max_delay_sec)
-                            }));
-                          }}
-                          className="w-16 p-1 border border-zinc-950 text-right font-mono font-black text-xs bg-white"
+                          value={getAntiBanInputValue('min_delay_sec')}
+                          onChange={(e) => handleAntiBanNumberChange('min_delay_sec', e.target.value)}
+                          onBlur={() => handleAntiBanNumberBlur('min_delay_sec', 1, 180)}
+                          className="w-16 p-1 border-2 border-zinc-950 text-right font-mono font-black text-xs bg-white focus:bg-[#E5FF00]/20 outline-none"
                         />
                         <span className="text-zinc-600">s</span>
                       </div>
@@ -1281,7 +1482,9 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                       max={120}
                       value={antiBanConfig.min_delay_sec}
                       onChange={(e) => {
+                        isAntiBanDirtyRef.current = true;
                         const val = Number(e.target.value);
+                        setAntiBanDrafts(prev => { const n = { ...prev }; delete n.min_delay_sec; return n; });
                         setAntiBanConfig(prev => ({
                           ...prev,
                           min_delay_sec: val,
@@ -1299,14 +1502,13 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                       <div className="flex items-center gap-1">
                         <input
                           type="number"
-                          min={antiBanConfig.min_delay_sec}
+                          inputMode="numeric"
+                          min={1}
                           max={300}
-                          value={antiBanConfig.max_delay_sec}
-                          onChange={(e) => {
-                            const val = Math.max(antiBanConfig.min_delay_sec, Number(e.target.value));
-                            setAntiBanConfig(prev => ({ ...prev, max_delay_sec: val }));
-                          }}
-                          className="w-16 p-1 border border-zinc-950 text-right font-mono font-black text-xs bg-white"
+                          value={getAntiBanInputValue('max_delay_sec')}
+                          onChange={(e) => handleAntiBanNumberChange('max_delay_sec', e.target.value)}
+                          onBlur={() => handleAntiBanNumberBlur('max_delay_sec', antiBanConfig.min_delay_sec, 300)}
+                          className="w-16 p-1 border-2 border-zinc-950 text-right font-mono font-black text-xs bg-white focus:bg-[#E5FF00]/20 outline-none"
                         />
                         <span className="text-zinc-600">s</span>
                       </div>
@@ -1316,10 +1518,14 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                       min={antiBanConfig.min_delay_sec}
                       max={240}
                       value={antiBanConfig.max_delay_sec}
-                      onChange={(e) => setAntiBanConfig(prev => ({
-                        ...prev,
-                        max_delay_sec: Number(e.target.value)
-                      }))}
+                      onChange={(e) => {
+                        isAntiBanDirtyRef.current = true;
+                        setAntiBanDrafts(prev => { const n = { ...prev }; delete n.max_delay_sec; return n; });
+                        setAntiBanConfig(prev => ({
+                          ...prev,
+                          max_delay_sec: Number(e.target.value)
+                        }));
+                      }}
                       className="w-full accent-zinc-950 cursor-pointer"
                     />
                   </div>
@@ -1354,15 +1560,14 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                       <div className="flex items-center gap-1">
                         <input
                           type="number"
-                          min={30}
+                          inputMode="numeric"
+                          min={20}
                           max={500}
                           step={10}
-                          value={antiBanConfig.typing_speed_ms}
-                          onChange={(e) => {
-                            const val = Math.max(20, Number(e.target.value));
-                            setAntiBanConfig(prev => ({ ...prev, typing_speed_ms: val }));
-                          }}
-                          className="w-16 p-1 border border-zinc-950 text-right font-mono font-black text-xs bg-white"
+                          value={getAntiBanInputValue('typing_speed_ms')}
+                          onChange={(e) => handleAntiBanNumberChange('typing_speed_ms', e.target.value)}
+                          onBlur={() => handleAntiBanNumberBlur('typing_speed_ms', 20, 500)}
+                          className="w-16 p-1 border-2 border-zinc-950 text-right font-mono font-black text-xs bg-white focus:bg-[#E5FF00]/20 outline-none"
                         />
                         <span className="text-zinc-600">ms</span>
                       </div>
@@ -1373,46 +1578,44 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                       max={300}
                       step={10}
                       value={antiBanConfig.typing_speed_ms}
-                      onChange={(e) => setAntiBanConfig(prev => ({
-                        ...prev,
-                        typing_speed_ms: Number(e.target.value)
-                      }))}
+                      onChange={(e) => {
+                        isAntiBanDirtyRef.current = true;
+                        setAntiBanDrafts(prev => { const n = { ...prev }; delete n.typing_speed_ms; return n; });
+                        setAntiBanConfig(prev => ({
+                          ...prev,
+                          typing_speed_ms: Number(e.target.value)
+                        }));
+                      }}
                       className="w-full accent-zinc-950 cursor-pointer"
                     />
                   </div>
 
-                  {/* Min e Max segundos */}
+                  {/* Min e Max segundos (Edição 100% livre para digitar qualquer valor como 15 sem travar no 1) */}
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex flex-col gap-1">
                       <span className="text-[10px] font-mono font-bold text-zinc-700">Duração Mín (s):</span>
                       <input
                         type="number"
+                        inputMode="numeric"
                         min={1}
-                        max={30}
-                        value={antiBanConfig.min_typing_sec}
-                        onChange={(e) => {
-                          const val = Math.max(1, Number(e.target.value));
-                          setAntiBanConfig(prev => ({
-                            ...prev,
-                            min_typing_sec: val,
-                            max_typing_sec: Math.max(val, prev.max_typing_sec)
-                          }));
-                        }}
-                        className="p-1.5 border border-zinc-950 font-mono text-xs bg-white font-bold"
+                        max={60}
+                        value={getAntiBanInputValue('min_typing_sec')}
+                        onChange={(e) => handleAntiBanNumberChange('min_typing_sec', e.target.value)}
+                        onBlur={() => handleAntiBanNumberBlur('min_typing_sec', 1, 60)}
+                        className="p-1.5 border-2 border-zinc-950 font-mono text-xs bg-white font-bold focus:bg-[#E5FF00]/20 outline-none"
                       />
                     </div>
                     <div className="flex flex-col gap-1">
                       <span className="text-[10px] font-mono font-bold text-zinc-700">Duração Máx (s):</span>
                       <input
                         type="number"
-                        min={antiBanConfig.min_typing_sec}
-                        max={60}
-                        value={antiBanConfig.max_typing_sec}
-                        onChange={(e) => setAntiBanConfig(prev => ({
-                          ...prev,
-                          max_typing_sec: Math.max(prev.min_typing_sec, Number(e.target.value))
-                        }))}
-                        className="p-1.5 border border-zinc-950 font-mono text-xs bg-white font-bold"
+                        inputMode="numeric"
+                        min={1}
+                        max={120}
+                        value={getAntiBanInputValue('max_typing_sec')}
+                        onChange={(e) => handleAntiBanNumberChange('max_typing_sec', e.target.value)}
+                        onBlur={() => handleAntiBanNumberBlur('max_typing_sec', antiBanConfig.min_typing_sec, 120)}
+                        className="p-1.5 border-2 border-zinc-950 font-mono text-xs bg-white font-bold focus:bg-[#E5FF00]/20 outline-none"
                       />
                     </div>
                   </div>
@@ -1440,36 +1643,41 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
               <div className="bg-zinc-50 border-2 border-zinc-950 p-4 flex flex-col gap-4">
                 <div className="border-b-2 border-zinc-200 pb-2">
                   <span className="font-mono text-xs font-black uppercase text-zinc-900 flex items-center gap-1.5">
-                    🛑 3. Limite Diário & Reset
+                    🛑 3. Limite Diário (1 Lead = 1 Disparo)
                   </span>
                   <p className="text-[11px] font-mono text-zinc-500 mt-1">
-                    Proteção máxima contra bloqueios do número.
+                    Contabiliza 1 disparo por empresa/lead prospectado.
                   </p>
                 </div>
 
                 <div className="flex flex-col gap-3">
                   <div className="flex flex-col gap-1.5">
-                    <span className="text-xs font-mono font-bold text-zinc-800">Limite Diário (mensagens/dia):</span>
-                    <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono font-bold text-zinc-800">Limite Diário (leads/dia):</span>
+                    <div className="flex items-center gap-2 flex-wrap">
                       <input
                         type="number"
+                        inputMode="numeric"
                         min={1}
                         max={500}
-                        value={antiBanConfig.daily_limit}
-                        onChange={(e) => setAntiBanConfig(prev => ({
-                          ...prev,
-                          daily_limit: Math.max(1, Number(e.target.value))
-                        }))}
-                        className="w-24 p-2 border-2 border-zinc-950 font-mono text-sm bg-white font-bold"
+                        value={getAntiBanInputValue('daily_limit')}
+                        onChange={(e) => handleAntiBanNumberChange('daily_limit', e.target.value)}
+                        onBlur={() => handleAntiBanNumberBlur('daily_limit', 1, 500)}
+                        className="w-24 p-2 border-2 border-zinc-950 font-mono text-sm bg-white font-bold focus:bg-[#E5FF00]/20 outline-none"
                       />
                       <div className="flex gap-1">
                         {[10, 15, 30, 50].map(val => (
                           <button
                             key={val}
                             type="button"
-                            onClick={() => setAntiBanConfig(prev => ({ ...prev, daily_limit: val }))}
-                            className={`px-2 py-1 text-[10px] font-mono font-bold border border-zinc-950 transition-colors cursor-pointer ${
-                              antiBanConfig.daily_limit === val ? 'bg-[#E5FF00] text-zinc-950' : 'bg-white hover:bg-zinc-100'
+                            onClick={async () => {
+                              soundEngine.playMechanicalClick('secondary');
+                              setAntiBanDrafts(prev => { const n = { ...prev }; delete n.daily_limit; return n; });
+                              const nextCfg = { ...antiBanConfig, daily_limit: val };
+                              setAntiBanConfig(nextCfg);
+                              await persistAntiBanToBackend(nextCfg, `✅ Limite diário atualizado para ${val} leads/dia!`);
+                            }}
+                            className={`px-2.5 py-1.5 text-[10px] font-mono font-bold border border-zinc-950 transition-colors cursor-pointer ${
+                              antiBanConfig.daily_limit === val ? 'bg-[#E5FF00] text-zinc-950 font-black' : 'bg-white hover:bg-zinc-100'
                             }`}
                           >
                             {val}
@@ -1481,9 +1689,9 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
 
                   <div className="p-3 bg-white border border-zinc-300 flex items-center justify-between gap-2">
                     <div className="flex flex-col">
-                      <span className="text-[10px] font-mono text-zinc-500 uppercase font-bold">Enviadas Hoje:</span>
+                      <span className="text-[10px] font-mono text-zinc-500 uppercase font-bold">Leads Disparados Hoje:</span>
                       <span className="font-mono text-base font-black text-zinc-950">
-                        {antiBanConfig.sent_today} / {antiBanConfig.daily_limit}
+                        {leadsDispatchedToday} / {antiBanConfig.daily_limit}
                       </span>
                     </div>
                     <button
@@ -1497,7 +1705,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                   </div>
 
                   <div className="p-2 bg-zinc-100 border border-zinc-300 text-[10px] font-mono text-zinc-600">
-                    Reseta automaticamente à meia-noite. O robô pausa novos disparos ao atingir a cota.
+                    1 Lead = 1 Disparo (mesmo enviando 2 balões humanizados). Respostas da IA SDR não consomem a cota diária.
                   </div>
                 </div>
               </div>
@@ -1505,27 +1713,31 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             </div>
 
             {/* Rodapé do Painel Anti-Ban */}
-            <div className="flex items-center justify-between border-t-2 border-zinc-200 pt-4 flex-wrap gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t-2 border-zinc-200 pt-4 gap-3">
               <span className="text-xs font-mono text-zinc-500">
-                * As regras são aplicadas imediatamente ao worker Go e sincronizadas com <code className="bg-zinc-100 px-1 py-0.5">antiban_config.json</code>
+                * As regras são aplicadas ao worker Go e sincronizadas com a meta diária do robô.
               </span>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 w-full sm:w-auto">
                 <button
                   type="button"
-                  onClick={() => setShowAntiBanPanel(false)}
-                  className="px-4 py-2 border-2 border-zinc-950 bg-zinc-100 hover:bg-zinc-200 font-mono text-xs font-bold uppercase cursor-pointer"
+                  onClick={() => {
+                    isAntiBanDirtyRef.current = false;
+                    setAntiBanDrafts({});
+                    setShowAntiBanPanel(false);
+                  }}
+                  className="flex-1 sm:flex-initial px-4 py-2.5 border-2 border-zinc-950 bg-zinc-100 hover:bg-zinc-200 font-mono text-xs font-bold uppercase cursor-pointer"
                 >
-                  Fechar Painel
+                  Fechar
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveAntiBanConfig}
                   disabled={isSavingAntiBan}
-                  className="px-6 py-2.5 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono font-black text-xs uppercase border-2 border-zinc-950 shadow-[3px_3px_0_0_#000] flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  className="flex-1 sm:flex-initial px-5 py-2.5 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono font-black text-xs uppercase border-2 border-zinc-950 shadow-[3px_3px_0_0_#000] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   <Check className="w-4 h-4 stroke-[3]" />
-                  <span>{isSavingAntiBan ? 'Salvando...' : 'Salvar Regras no Microserviço'}</span>
+                  <span>{isSavingAntiBan ? 'Salvando...' : 'Salvar Regras'}</span>
                 </button>
               </div>
             </div>
@@ -1533,51 +1745,117 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         )}
       </AnimatePresence>
 
-      {/* 3. CARDS DE MÉTRICAS DO DIA */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-zinc-950 border-4 border-zinc-950 p-4 shadow-[4px_4px_0_0_#18181B]">
+      {/* 3. CARDS DE MÉTRICAS DO DIA & FUNIL INTERATIVO (1 LEAD = 1 DISPARO) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+        {/* Card 1: Na Fila & Minerados */}
+        <button
+          type="button"
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setActiveKanbanTab(activeKanbanTab === 'pending' ? 'all' : 'pending');
+          }}
+          className={`text-left bg-zinc-950 border-4 p-3 sm:p-4 shadow-[4px_4px_0_0_#18181B] transition-all cursor-pointer active:scale-[0.98] ${
+            activeKanbanTab === 'pending' ? 'border-[#E5FF00] ring-2 ring-[#E5FF00]/40' : 'border-zinc-950 hover:border-zinc-800'
+          }`}
+        >
           <div className="flex items-center justify-between text-zinc-400 mb-1">
-            <span className="font-mono text-[11px] uppercase tracking-wider font-bold">Minerados Hoje</span>
-            <Building2 className="w-4 h-4 text-zinc-500" />
+            <span className="font-mono text-[10px] sm:text-[11px] uppercase tracking-wider font-bold">Na Fila de Espera</span>
+            <Building2 className="w-4 h-4 text-zinc-500 shrink-0" />
           </div>
-          <div className="text-2xl font-mono font-black text-zinc-100">
-            {metrics?.minedToday || 0}
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl sm:text-2xl font-mono font-black text-zinc-100">
+              {pendingCount}
+            </span>
+            <span className="text-[10px] font-mono text-zinc-400">
+              prontos
+            </span>
           </div>
-          <div className="text-[10px] text-zinc-500 mt-1">Google Maps / SerpAPI</div>
-        </div>
+          <div className="text-[10px] font-mono text-zinc-500 mt-1 flex items-center justify-between gap-1">
+            <span>+{metrics?.minedToday || 0} minerados hoje</span>
+            <span className="text-[#E5FF00] hidden sm:inline">Filtrar →</span>
+          </div>
+        </button>
 
-        <div className="bg-zinc-950 border-4 border-zinc-950 p-4 shadow-[4px_4px_0_0_#18181B]">
+        {/* Card 2: Disparados Hoje (1 Lead = 1 Disparo) */}
+        <button
+          type="button"
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setActiveKanbanTab(activeKanbanTab === 'sent' ? 'all' : 'sent');
+          }}
+          className={`text-left bg-zinc-950 border-4 p-3 sm:p-4 shadow-[4px_4px_0_0_#18181B] transition-all cursor-pointer active:scale-[0.98] ${
+            activeKanbanTab === 'sent' ? 'border-[#E5FF00] ring-2 ring-[#E5FF00]/40' : 'border-zinc-950 hover:border-zinc-800'
+          }`}
+        >
           <div className="flex items-center justify-between text-zinc-400 mb-1">
-            <span className="font-mono text-[11px] uppercase tracking-wider font-bold">Disparados Hoje</span>
-            <Send className="w-4 h-4 text-[#E5FF00]" />
+            <span className="font-mono text-[10px] sm:text-[11px] uppercase tracking-wider font-bold">Disparados Hoje</span>
+            <Send className="w-4 h-4 text-[#E5FF00] shrink-0" />
           </div>
-          <div className="text-2xl font-mono font-black text-[#E5FF00]">
-            {antiBanConfig.sent_today} <span className="text-xs text-zinc-500 font-normal">/ {antiBanConfig.daily_limit}</span>
+          <div className="text-xl sm:text-2xl font-mono font-black text-[#E5FF00]">
+            {leadsDispatchedToday} <span className="text-xs text-zinc-500 font-normal">/ {dailyQuota}</span>
           </div>
-          <div className="text-[10px] text-zinc-500 mt-1">Limite diário anti-ban ativo</div>
-        </div>
+          <div className="text-[10px] font-mono text-zinc-500 mt-1 flex items-center justify-between gap-1">
+            <span>1 lead = 1 disparo ({sentWaitCount} aguard.)</span>
+          </div>
+        </button>
 
-        <div className="bg-zinc-950 border-4 border-zinc-950 p-4 shadow-[4px_4px_0_0_#18181B]">
+        {/* Card 3: Em Conversa / Respostas */}
+        <button
+          type="button"
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setActiveKanbanTab(activeKanbanTab === 'chatting' ? 'all' : 'chatting');
+          }}
+          className={`text-left bg-zinc-950 border-4 p-3 sm:p-4 shadow-[4px_4px_0_0_#18181B] transition-all cursor-pointer active:scale-[0.98] ${
+            activeKanbanTab === 'chatting' ? 'border-emerald-400 ring-2 ring-emerald-400/40' : 'border-zinc-950 hover:border-zinc-800'
+          }`}
+        >
           <div className="flex items-center justify-between text-zinc-400 mb-1">
-            <span className="font-mono text-[11px] uppercase tracking-wider font-bold">Respostas</span>
-            <MessageSquare className="w-4 h-4 text-emerald-400" />
+            <span className="font-mono text-[10px] sm:text-[11px] uppercase tracking-wider font-bold">Em Conversa 💬</span>
+            <MessageSquare className="w-4 h-4 text-emerald-400 shrink-0" />
           </div>
-          <div className="text-2xl font-mono font-black text-emerald-400">
-            {metrics?.repliesToday || 0}
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl sm:text-2xl font-mono font-black text-emerald-400">
+              {chattingCount}
+            </span>
+            <span className="text-[10px] font-mono text-zinc-400">
+              ({totalRepliedCount} resp. total)
+            </span>
           </div>
-          <div className="text-[10px] text-zinc-500 mt-1">Interações no WhatsApp</div>
-        </div>
+          <div className="text-[10px] font-mono text-zinc-500 mt-1">
+            Atendimento ativo da IA SDR
+          </div>
+        </button>
 
-        <div className="bg-zinc-950 border-4 border-zinc-950 p-4 shadow-[4px_4px_0_0_#18181B]">
+        {/* Card 4: Leads Qualificados */}
+        <button
+          type="button"
+          onClick={() => {
+            soundEngine.playMechanicalClick('secondary');
+            setActiveKanbanTab(activeKanbanTab === 'qualified' ? 'all' : 'qualified');
+          }}
+          className={`text-left bg-zinc-950 border-4 p-3 sm:p-4 shadow-[4px_4px_0_0_#18181B] transition-all cursor-pointer active:scale-[0.98] ${
+            activeKanbanTab === 'qualified' ? 'border-amber-400 ring-2 ring-amber-400/40' : 'border-zinc-950 hover:border-zinc-800'
+          }`}
+        >
           <div className="flex items-center justify-between text-zinc-400 mb-1">
-            <span className="font-mono text-[11px] uppercase tracking-wider font-bold">Qualificados 🔥</span>
-            <Flame className="w-4 h-4 text-amber-400" />
+            <span className="font-mono text-[10px] sm:text-[11px] uppercase tracking-wider font-bold">Qualificados 🔥</span>
+            <Flame className="w-4 h-4 text-amber-400 shrink-0" />
           </div>
-          <div className="text-2xl font-mono font-black text-amber-400">
-            {metrics?.qualifiedToday || 0}
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl sm:text-2xl font-mono font-black text-amber-400">
+              {qualifiedCount}
+            </span>
+            {disqualifiedCount > 0 && (
+              <span className="text-[10px] font-mono text-zinc-500">
+                • {disqualifiedCount} desc.
+              </span>
+            )}
           </div>
-          <div className="text-[10px] text-zinc-500 mt-1">Oportunidades com demanda</div>
-        </div>
+          <div className="text-[10px] font-mono text-zinc-500 mt-1">
+            Prontos para fechamento humano
+          </div>
+        </button>
       </div>
 
       {/* BANNER DE IMPORTAÇÃO DE LEADS DA BUSCA */}
@@ -1622,22 +1900,22 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
 
       {/* 4. KANBAN / PIPELINE DE LEADS */}
       <div className="bg-zinc-950 border-4 border-zinc-950 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B]">
-        <div className="p-4 border-b-2 border-zinc-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3 flex-wrap">
+        <div className="p-3.5 sm:p-4 border-b-2 border-zinc-900 flex flex-col gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-[#E5FF00]" />
-              <h3 className="font-mono text-sm font-black uppercase tracking-wider text-zinc-100">
+              <Layers className="w-4 h-4 text-[#E5FF00] shrink-0" />
+              <h3 className="font-mono text-xs sm:text-sm font-black uppercase tracking-wider text-zinc-100">
                 Pipeline de Leads da Automação ({leads.length})
               </h3>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 onClick={() => {
                   soundEngine.playMechanicalClick('secondary');
                   setIsManualLeadModalOpen(true);
                 }}
-                className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700 font-mono text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer transition-colors"
+                className="flex-1 sm:flex-initial justify-center px-2.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-zinc-700 font-mono text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer transition-colors"
                 title="Cadastrar lead manualmente"
               >
                 <Plus className="w-3 h-3 text-[#E5FF00]" />
@@ -1646,10 +1924,11 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
               <button
                 onClick={() => {
                   soundEngine.playMechanicalClick('secondary');
-                  setRecordReplyForm({ phone: '', message: '' });
+                  const lastSentLead = leads.find(l => l.status === 'sent' || l.status === 'chatting');
+                  setRecordReplyForm({ phone: lastSentLead?.phone || '', message: '' });
                   setIsRecordReplyModalOpen(true);
                 }}
-                className="px-2.5 py-1 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-600/80 font-mono text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer transition-colors"
+                className="flex-1 sm:flex-initial justify-center px-2.5 py-1.5 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-600/80 font-mono text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer transition-colors"
                 title="Registrar resposta de contato no WhatsApp"
               >
                 <CheckCircle2 className="w-3 h-3 text-emerald-400" />
@@ -1659,7 +1938,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                 <button
                   onClick={handleImportInitialLeads}
                   disabled={isImporting}
-                  className="px-2.5 py-1 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 border border-zinc-950 font-mono text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer transition-colors"
+                  className="w-full sm:w-auto justify-center px-2.5 py-1.5 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 border border-zinc-950 font-mono text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer transition-colors"
                   title="Importar leads encontrados na pesquisa"
                 >
                   <Plus className="w-3 h-3 stroke-[3]" />
@@ -1669,15 +1948,15 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             </div>
           </div>
 
-          {/* Abas de filtro do pipeline */}
-          <div className="flex flex-wrap gap-1.5 font-mono text-[11px]">
+          {/* Abas de filtro do pipeline (Scroll horizontal fluido no mobile, contadores 100% sincronizados) */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap font-mono text-[11px] -mx-1 px-1">
             {[
               { id: 'all', label: 'Todos', count: leads.length },
-              { id: 'pending', label: 'Na Fila', count: leads.filter(l => l.status === 'pending').length },
-              { id: 'sent', label: 'Disparados', count: leads.filter(l => l.status === 'sent').length },
-              { id: 'chatting', label: '💬 Em Conversa', count: leads.filter(l => l.status === 'chatting' || !!l.last_reply_at).length },
-              { id: 'qualified', label: '🔥 Qualificados', count: leads.filter(l => l.status === 'qualified' || l.interest_level === 'high').length },
-              { id: 'disqualified', label: 'Sem Interesse', count: leads.filter(l => l.status === 'disqualified').length }
+              { id: 'pending', label: 'Na Fila', count: pendingCount },
+              { id: 'sent', label: 'Disparados', count: sentWaitCount },
+              { id: 'chatting', label: '💬 Em Conversa', count: chattingCount },
+              { id: 'qualified', label: '🔥 Qualificados', count: qualifiedCount },
+              { id: 'disqualified', label: 'Sem Interesse', count: disqualifiedCount }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -1685,7 +1964,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                   soundEngine.playMechanicalClick('secondary');
                   setActiveKanbanTab(tab.id as any);
                 }}
-                className={`px-3 py-1.5 border-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
+                className={`px-3 py-1.5 border-2 transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
                   activeKanbanTab === tab.id
                     ? 'bg-[#E5FF00] text-zinc-950 border-[#E5FF00] font-black'
                     : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'
@@ -1697,6 +1976,8 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                     ? 'bg-zinc-950 text-[#E5FF00]'
                     : tab.id === 'chatting' && tab.count > 0
                     ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60 font-bold'
+                    : tab.id === 'qualified' && tab.count > 0
+                    ? 'bg-amber-950 text-amber-300 border border-amber-700/60 font-bold'
                     : 'bg-zinc-800 text-zinc-400'
                 }`}>
                   {tab.count}
@@ -1704,15 +1985,15 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
               </button>
             ))}
 
-            {leads.some(l => l.status === 'disqualified' || l.interest_level === 'none') && (
+            {disqualifiedCount > 0 && (
               <button
                 type="button"
                 onClick={handleDeleteDisqualified}
-                className="ml-auto px-2.5 py-1.5 bg-zinc-900 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-800/80 transition-colors cursor-pointer flex items-center gap-1 font-mono text-[11px]"
+                className="ml-auto px-2.5 py-1.5 bg-zinc-900 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-800/80 transition-colors cursor-pointer flex items-center gap-1 font-mono text-[11px] shrink-0"
                 title="Excluir todos os leads desqualificados de uma vez"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Limpar Desqualificados ({leads.filter(l => l.status === 'disqualified' || l.interest_level === 'none').length})</span>
+                <span>Limpar ({disqualifiedCount})</span>
               </button>
             )}
           </div>
@@ -1972,12 +2253,12 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
       {/* 6. GAVETA / MODAL DE CHAT COM O LEAD */}
       <AnimatePresence>
         {selectedLeadForChat && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-zinc-950 border-4 border-zinc-950 w-full max-w-2xl h-[600px] flex flex-col shadow-[12px_12px_0_0_#000]"
+              className="bg-zinc-950 border-t-4 sm:border-4 border-zinc-950 w-full max-w-2xl h-[90dvh] sm:h-[600px] flex flex-col shadow-[12px_12px_0_0_#000]"
             >
               {/* Header do Chat */}
               <div className="p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-900/50">
@@ -2091,12 +2372,12 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
       {/* 7. MODAL DE CONFIGURAÇÕES AVANÇADAS DA AUTOMAÇÃO */}
       <AnimatePresence>
         {isSettingsOpen && editSettings && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-zinc-950 border-4 border-zinc-950 w-full max-w-3xl max-h-[88vh] flex flex-col shadow-[12px_12px_0_0_#000]"
+              className="bg-zinc-950 border-t-4 sm:border-4 border-zinc-950 w-full max-w-3xl max-h-[92dvh] sm:max-h-[88vh] flex flex-col shadow-[12px_12px_0_0_#000]"
             >
               <div className="p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-900/50">
                 <div className="flex items-center gap-2">
@@ -2228,13 +2509,28 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                     </label>
                     <input
                       type="number"
+                      inputMode="numeric"
                       min={1}
-                      max={60}
-                      value={editSettings.daily_limit}
+                      max={500}
+                      value={settingsDrafts.daily_limit !== undefined ? settingsDrafts.daily_limit : String(editSettings.daily_limit)}
                       onChange={e => {
-                        const val = parseInt(e.target.value) || 10;
-                        setEditSettings({ ...editSettings, daily_limit: val });
-                        setAntiBanConfig(prev => ({ ...prev, daily_limit: val }));
+                        const raw = e.target.value;
+                        setSettingsDrafts(prev => ({ ...prev, daily_limit: raw }));
+                        if (raw.trim() !== '') {
+                          const parsed = parseInt(raw, 10);
+                          if (!Number.isNaN(parsed) && parsed > 0) {
+                            setEditSettings({ ...editSettings, daily_limit: parsed });
+                            setAntiBanConfig(prev => ({ ...prev, daily_limit: parsed }));
+                          }
+                        }
+                      }}
+                      onBlur={() => {
+                        const raw = settingsDrafts.daily_limit;
+                        setSettingsDrafts(prev => { const n = { ...prev }; delete n.daily_limit; return n; });
+                        const parsed = raw !== undefined && raw.trim() !== '' ? parseInt(raw, 10) : editSettings.daily_limit;
+                        const safeVal = Number.isNaN(parsed) || parsed < 1 ? 10 : Math.min(500, parsed);
+                        setEditSettings({ ...editSettings, daily_limit: safeVal });
+                        setAntiBanConfig(prev => ({ ...prev, daily_limit: safeVal }));
                       }}
                       className="w-full bg-zinc-900 border border-zinc-800 p-2 text-zinc-100 font-mono font-bold focus:border-[#E5FF00] outline-none"
                     />
@@ -2275,15 +2571,29 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                     </label>
                     <input
                       type="number"
+                      inputMode="numeric"
                       min={1}
                       max={180}
-                      value={editSettings.min_interval_mins}
+                      value={settingsDrafts.min_interval_mins !== undefined ? settingsDrafts.min_interval_mins : String(editSettings.min_interval_mins)}
                       onChange={e => {
-                        const val = Math.max(1, parseInt(e.target.value) || 15);
+                        const raw = e.target.value;
+                        setSettingsDrafts(prev => ({ ...prev, min_interval_mins: raw }));
+                        if (raw.trim() !== '') {
+                          const parsed = parseInt(raw, 10);
+                          if (!Number.isNaN(parsed) && parsed > 0) {
+                            setEditSettings({ ...editSettings, min_interval_mins: parsed });
+                          }
+                        }
+                      }}
+                      onBlur={() => {
+                        const raw = settingsDrafts.min_interval_mins;
+                        setSettingsDrafts(prev => { const n = { ...prev }; delete n.min_interval_mins; return n; });
+                        const parsed = raw !== undefined && raw.trim() !== '' ? parseInt(raw, 10) : editSettings.min_interval_mins;
+                        const safeVal = Number.isNaN(parsed) || parsed < 1 ? 15 : Math.min(180, parsed);
                         setEditSettings({
                           ...editSettings,
-                          min_interval_mins: val,
-                          max_interval_mins: Math.max(val, editSettings.max_interval_mins || 35)
+                          min_interval_mins: safeVal,
+                          max_interval_mins: Math.max(safeVal, editSettings.max_interval_mins || 35)
                         });
                       }}
                       className="w-full bg-zinc-900 border border-zinc-800 p-2 text-zinc-100 font-mono font-bold focus:border-[#E5FF00] outline-none"
@@ -2296,12 +2606,26 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                     </label>
                     <input
                       type="number"
-                      min={editSettings.min_interval_mins || 1}
+                      inputMode="numeric"
+                      min={1}
                       max={240}
-                      value={editSettings.max_interval_mins}
+                      value={settingsDrafts.max_interval_mins !== undefined ? settingsDrafts.max_interval_mins : String(editSettings.max_interval_mins)}
                       onChange={e => {
-                        const val = Math.max(editSettings.min_interval_mins || 1, parseInt(e.target.value) || 35);
-                        setEditSettings({ ...editSettings, max_interval_mins: val });
+                        const raw = e.target.value;
+                        setSettingsDrafts(prev => ({ ...prev, max_interval_mins: raw }));
+                        if (raw.trim() !== '') {
+                          const parsed = parseInt(raw, 10);
+                          if (!Number.isNaN(parsed) && parsed > 0) {
+                            setEditSettings({ ...editSettings, max_interval_mins: parsed });
+                          }
+                        }
+                      }}
+                      onBlur={() => {
+                        const raw = settingsDrafts.max_interval_mins;
+                        setSettingsDrafts(prev => { const n = { ...prev }; delete n.max_interval_mins; return n; });
+                        const parsed = raw !== undefined && raw.trim() !== '' ? parseInt(raw, 10) : editSettings.max_interval_mins;
+                        const safeVal = Number.isNaN(parsed) || parsed < 1 ? 35 : Math.max(editSettings.min_interval_mins || 1, Math.min(240, parsed));
+                        setEditSettings({ ...editSettings, max_interval_mins: safeVal });
                       }}
                       className="w-full bg-zinc-900 border border-zinc-800 p-2 text-zinc-100 font-mono font-bold focus:border-[#E5FF00] outline-none"
                     />

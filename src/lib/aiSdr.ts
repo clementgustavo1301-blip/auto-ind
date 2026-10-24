@@ -402,7 +402,12 @@ const lastAiReplyTimestampByPhone: Map<string, number> = (g.__lastAiReplyTimesta
  */
 export async function processIncomingWhatsAppMessage(
   rawPhone: string,
-  incomingText: string
+  incomingText: string,
+  meta?: {
+    pushName?: string;
+    senderJid?: string;
+    chatJid?: string;
+  }
 ): Promise<{
   success: boolean;
   replied: boolean;
@@ -425,18 +430,52 @@ export async function processIncomingWhatsAppMessage(
     return { success: true, replied: false };
   }
 
-  // Deduplicação em janela de 15 segundos para evitar que Webhook e Polling executem a mesma mensagem
-  const dedupKey = `${cleanIncoming}:${trimmedText.toLowerCase()}`;
-  const lastSeen = recentInboundSignatures.get(dedupKey) || 0;
-  if (Date.now() - lastSeen < 15000) {
-    return { success: true, replied: false };
-  }
-  recentInboundSignatures.set(dedupKey, Date.now());
-
   const leads = await getAutomationLeads();
   
   // Localiza o lead usando comparação inteligente de número
-  const lead = leads.find(l => isSamePhone(l.phone, rawPhone));
+  let lead = leads.find(l => isSamePhone(l.phone, rawPhone));
+
+  // Fallback 1: se chatJid ou senderJid trouxer o telefone
+  if (!lead && meta?.chatJid && !meta.chatJid.includes('@lid')) {
+    lead = leads.find(l => isSamePhone(l.phone, meta.chatJid!));
+  }
+  if (!lead && meta?.senderJid && !meta.senderJid.includes('@lid')) {
+    lead = leads.find(l => isSamePhone(l.phone, meta.senderJid!));
+  }
+
+  // Fallback 2: se veio de um @lid do WhatsApp Multi-Device, verifica correspondência pelo PushName ou pelo lead disparado recentemente
+  const isLikelyLid =
+    rawPhone.includes('@lid') ||
+    Boolean(meta?.senderJid?.includes('@lid')) ||
+    Boolean(meta?.chatJid?.includes('@lid')) ||
+    cleanIncoming.length >= 14;
+
+  if (!lead && meta?.pushName) {
+    const normPush = normalizeText(meta.pushName);
+    if (normPush.length >= 3) {
+      lead = leads.find(l => {
+        if (l.status === 'pending' || isBlacklistedPhone(l.phone)) return false;
+        const normCompany = normalizeText(l.company_name);
+        return normCompany === normPush || normCompany.includes(normPush) || normPush.includes(normCompany);
+      });
+    }
+  }
+
+  if (!lead && isLikelyLid) {
+    // Busca leads ativos que receberam disparo nas últimas 12 horas
+    const recentActiveLeads = leads
+      .filter(l => (l.status === 'sent' || l.status === 'chatting') && Boolean(l.dispatched_at) && !isBlacklistedPhone(l.phone))
+      .sort((a, b) => new Date(b.dispatched_at!).getTime() - new Date(a.dispatched_at!).getTime());
+
+    if (recentActiveLeads.length > 0) {
+      const mostRecent = recentActiveLeads[0];
+      const hoursSinceDispatch = (Date.now() - new Date(mostRecent.dispatched_at!).getTime()) / (1000 * 60 * 60);
+      if (hoursSinceDispatch <= 12) {
+        console.log(`[AI SDR LID Match] Mensagem @lid (${rawPhone}) vinculada ao lead ativo disparado recentemente: ${mostRecent.company_name} (${mostRecent.phone})`);
+        lead = mostRecent;
+      }
+    }
+  }
 
   // 3. REGRA CRÍTICA: A IA SDR DEVE RESPONDER EXCLUSIVAMENTE A LEADS CADASTRADOS NO PIPELINE!
   // Contatos pessoais, conversas externas, grupos ou contatos que foram excluídos NUNCA são respondidos nem cadastrados.
@@ -444,6 +483,16 @@ export async function processIncomingWhatsAppMessage(
     console.log(`[AI SDR] Contato ${rawPhone} não é um lead cadastrado no pipeline (ou foi excluído). Mensagem ignorada.`);
     return { success: true, replied: false };
   }
+
+  const canonicalDigits = cleanPhoneDigits(lead.phone) || cleanIncoming;
+
+  // Deduplicação em janela de 15 segundos para evitar que Webhook e Polling executem a mesma mensagem
+  const dedupKey = `${canonicalDigits}:${trimmedText.toLowerCase()}`;
+  const lastSeen = recentInboundSignatures.get(dedupKey) || 0;
+  if (Date.now() - lastSeen < 15000) {
+    return { success: true, replied: false };
+  }
+  recentInboundSignatures.set(dedupKey, Date.now());
 
   // 4. Se o telefone do lead estiver na lista de exclusão/bloqueio
   if (isBlacklistedPhone(lead.phone)) {
@@ -610,11 +659,11 @@ export async function processIncomingWhatsAppMessage(
   }
 
   // 3. Envia a resposta automática via WhatsApp Service (com proteção anti-spam para evitar mensagens repetidas em sequência)
-  const lastReplyTime = lastAiReplyTimestampByPhone.get(cleanIncoming) || 0;
+  const lastReplyTime = lastAiReplyTimestampByPhone.get(canonicalDigits) || 0;
   const isWithinCooldown = (Date.now() - lastReplyTime) < 8000; // Cooldown de 8s para evitar chamadas concorrentes duplicadas
 
   if (analysis.replyMessage && !isWithinCooldown) {
-    lastAiReplyTimestampByPhone.set(cleanIncoming, Date.now());
+    lastAiReplyTimestampByPhone.set(canonicalDigits, Date.now());
     try {
       const sendRes = await sendWhatsAppHumanBubbles(
         {
@@ -677,7 +726,11 @@ export async function syncInboundWhatsAppMessages(): Promise<number> {
       await clearWhatsAppInbound(item.id);
 
       console.log(`[AI SDR Polling] 📩 Nova mensagem detectada via /api/inbound de ${item.phone}: "${item.message}"`);
-      await processIncomingWhatsAppMessage(item.phone, item.message);
+      await processIncomingWhatsAppMessage(item.phone, item.message, {
+        pushName: item.push_name,
+        senderJid: item.sender_jid,
+        chatJid: item.chat_jid,
+      });
       processedCount++;
     }
   } catch (err) {

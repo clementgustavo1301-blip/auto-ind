@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Lead, IndustrialLead } from '@/types';
 import { toDialablePhone, formatPhoneDisplay } from '@/lib/phone';
 import { 
@@ -340,6 +340,13 @@ export function WhatsAppCampaignPanel({
   const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
   const [configSuccessMsg, setConfigSuccessMsg] = useState<string>('');
   const [simulatedCountdown, setSimulatedCountdown] = useState<number | null>(null);
+  const [antiBanDrafts, setAntiBanDrafts] = useState<Record<string, string>>({});
+  const showConfigPanelRef = useRef<boolean>(false);
+  const isConfigDirtyRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    showConfigPanelRef.current = showConfigPanel;
+  }, [showConfigPanel]);
 
   // Carregar configurações do microserviço
   const fetchConfig = async () => {
@@ -347,16 +354,25 @@ export function WhatsAppCampaignPanel({
       const res = await fetch('/api/whatsapp/config', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        setAntiBanConfig(prev => ({ ...prev, ...data }));
+        setAntiBanConfig(prev => {
+          if (showConfigPanelRef.current || isConfigDirtyRef.current) {
+            return {
+              ...prev,
+              sent_today: data.sent_today ?? prev.sent_today,
+            };
+          }
+          return { ...prev, ...data };
+        });
       }
     } catch (e) {
       console.error('Falha ao carregar configurações anti-ban:', e);
     }
   };
 
-  const handleSaveConfig = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    soundEngine.playMechanicalClick('primary');
+  const persistConfigPayload = async (
+    payload: typeof antiBanConfig,
+    customSuccessMsg?: string
+  ) => {
     setIsSavingConfig(true);
     setConfigSuccessMsg('');
 
@@ -364,12 +380,16 @@ export function WhatsAppCampaignPanel({
       const res = await fetch('/api/whatsapp/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(antiBanConfig),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) {
+        isConfigDirtyRef.current = false;
+        setAntiBanDrafts({});
         soundEngine.playSentNotification();
-        setConfigSuccessMsg('Configurações salvas e ativas com sucesso no microserviço!');
+        setConfigSuccessMsg(
+          customSuccessMsg || 'Configurações salvas e ativas com sucesso no microserviço!'
+        );
         fetchStatus();
         setTimeout(() => setConfigSuccessMsg(''), 4000);
       } else {
@@ -380,6 +400,12 @@ export function WhatsAppCampaignPanel({
     } finally {
       setIsSavingConfig(false);
     }
+  };
+
+  const handleSaveConfig = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    soundEngine.playMechanicalClick('primary');
+    await persistConfigPayload(antiBanConfig);
   };
 
   const handleResetCounter = async () => {
@@ -403,47 +429,51 @@ export function WhatsAppCampaignPanel({
 
   const applyPreset = (preset: 'safe' | 'medium' | 'fast' | 'test') => {
     soundEngine.playMechanicalClick('secondary');
+    let nextConfig = { ...antiBanConfig };
     if (preset === 'safe') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      nextConfig = {
+        ...nextConfig,
         daily_limit: 15,
         min_delay_sec: 40,
         max_delay_sec: 80,
         typing_speed_ms: 180,
         min_typing_sec: 4,
         max_typing_sec: 20,
-      }));
+      };
     } else if (preset === 'medium') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      nextConfig = {
+        ...nextConfig,
         daily_limit: 30,
         min_delay_sec: 25,
         max_delay_sec: 50,
         typing_speed_ms: 140,
         min_typing_sec: 3,
         max_typing_sec: 15,
-      }));
+      };
     } else if (preset === 'fast') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      nextConfig = {
+        ...nextConfig,
         daily_limit: 60,
         min_delay_sec: 15,
         max_delay_sec: 30,
         typing_speed_ms: 90,
         min_typing_sec: 2,
         max_typing_sec: 8,
-      }));
+      };
     } else if (preset === 'test') {
-      setAntiBanConfig(prev => ({
-        ...prev,
+      nextConfig = {
+        ...nextConfig,
         daily_limit: 100,
         min_delay_sec: 4,
         max_delay_sec: 8,
         typing_speed_ms: 50,
         min_typing_sec: 2,
         max_typing_sec: 5,
-      }));
+      };
     }
+    setAntiBanDrafts({});
+    setAntiBanConfig(nextConfig);
+    void persistConfigPayload(nextConfig, 'Preset aplicado e salvo automaticamente!');
   };
 
   // 5. Gerenciamento do Modal de QR Code e Conexão WhatsApp
@@ -1786,16 +1816,38 @@ export function WhatsAppCampaignPanel({
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
+                        inputMode="numeric"
                         min={1}
                         max={180}
-                        value={antiBanConfig.min_delay_sec}
+                        value={antiBanDrafts.min_delay_sec ?? String(antiBanConfig.min_delay_sec)}
                         onChange={(e) => {
-                          const val = Math.max(1, Number(e.target.value));
-                          setAntiBanConfig(prev => ({
-                            ...prev,
-                            min_delay_sec: val,
-                            max_delay_sec: Math.max(val, prev.max_delay_sec)
-                          }));
+                          isConfigDirtyRef.current = true;
+                          const raw = e.target.value;
+                          setAntiBanDrafts(prev => ({ ...prev, min_delay_sec: raw }));
+                          if (raw !== '' && !isNaN(Number(raw)) && Number(raw) >= 1) {
+                            const val = Number(raw);
+                            setAntiBanConfig(prev => ({
+                              ...prev,
+                              min_delay_sec: val,
+                              max_delay_sec: Math.max(val, prev.max_delay_sec)
+                            }));
+                          }
+                        }}
+                        onBlur={() => {
+                          const raw = antiBanDrafts.min_delay_sec;
+                          if (raw !== undefined) {
+                            const val = Math.max(1, Math.min(180, Number(raw) || 1));
+                            setAntiBanConfig(prev => ({
+                              ...prev,
+                              min_delay_sec: val,
+                              max_delay_sec: Math.max(val, prev.max_delay_sec)
+                            }));
+                            setAntiBanDrafts(prev => {
+                              const next = { ...prev };
+                              delete next.min_delay_sec;
+                              return next;
+                            });
+                          }
                         }}
                         className="w-16 p-1 border border-zinc-950 text-right font-mono font-black text-xs bg-white"
                       />
@@ -1808,7 +1860,13 @@ export function WhatsAppCampaignPanel({
                     max={120}
                     value={antiBanConfig.min_delay_sec}
                     onChange={(e) => {
+                      isConfigDirtyRef.current = true;
                       const val = Number(e.target.value);
+                      setAntiBanDrafts(prev => {
+                        const next = { ...prev };
+                        delete next.min_delay_sec;
+                        return next;
+                      });
                       setAntiBanConfig(prev => ({
                         ...prev,
                         min_delay_sec: val,
@@ -1826,12 +1884,29 @@ export function WhatsAppCampaignPanel({
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
-                        min={antiBanConfig.min_delay_sec}
+                        inputMode="numeric"
+                        min={1}
                         max={300}
-                        value={antiBanConfig.max_delay_sec}
+                        value={antiBanDrafts.max_delay_sec ?? String(antiBanConfig.max_delay_sec)}
                         onChange={(e) => {
-                          const val = Math.max(antiBanConfig.min_delay_sec, Number(e.target.value));
-                          setAntiBanConfig(prev => ({ ...prev, max_delay_sec: val }));
+                          isConfigDirtyRef.current = true;
+                          const raw = e.target.value;
+                          setAntiBanDrafts(prev => ({ ...prev, max_delay_sec: raw }));
+                          if (raw !== '' && !isNaN(Number(raw)) && Number(raw) >= 1) {
+                            setAntiBanConfig(prev => ({ ...prev, max_delay_sec: Number(raw) }));
+                          }
+                        }}
+                        onBlur={() => {
+                          const raw = antiBanDrafts.max_delay_sec;
+                          if (raw !== undefined) {
+                            const val = Math.max(antiBanConfig.min_delay_sec, Math.min(300, Number(raw) || antiBanConfig.min_delay_sec));
+                            setAntiBanConfig(prev => ({ ...prev, max_delay_sec: val }));
+                            setAntiBanDrafts(prev => {
+                              const next = { ...prev };
+                              delete next.max_delay_sec;
+                              return next;
+                            });
+                          }
                         }}
                         className="w-16 p-1 border border-zinc-950 text-right font-mono font-black text-xs bg-white"
                       />
@@ -1843,10 +1918,18 @@ export function WhatsAppCampaignPanel({
                     min={antiBanConfig.min_delay_sec}
                     max={240}
                     value={antiBanConfig.max_delay_sec}
-                    onChange={(e) => setAntiBanConfig(prev => ({
-                      ...prev,
-                      max_delay_sec: Number(e.target.value)
-                    }))}
+                    onChange={(e) => {
+                      isConfigDirtyRef.current = true;
+                      setAntiBanDrafts(prev => {
+                        const next = { ...prev };
+                        delete next.max_delay_sec;
+                        return next;
+                      });
+                      setAntiBanConfig(prev => ({
+                        ...prev,
+                        max_delay_sec: Number(e.target.value)
+                      }));
+                    }}
                     className="w-full accent-zinc-950 cursor-pointer"
                   />
                 </div>
@@ -1881,13 +1964,30 @@ export function WhatsAppCampaignPanel({
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
-                        min={30}
+                        inputMode="numeric"
+                        min={20}
                         max={500}
                         step={10}
-                        value={antiBanConfig.typing_speed_ms}
+                        value={antiBanDrafts.typing_speed_ms ?? String(antiBanConfig.typing_speed_ms)}
                         onChange={(e) => {
-                          const val = Math.max(20, Number(e.target.value));
-                          setAntiBanConfig(prev => ({ ...prev, typing_speed_ms: val }));
+                          isConfigDirtyRef.current = true;
+                          const raw = e.target.value;
+                          setAntiBanDrafts(prev => ({ ...prev, typing_speed_ms: raw }));
+                          if (raw !== '' && !isNaN(Number(raw)) && Number(raw) >= 1) {
+                            setAntiBanConfig(prev => ({ ...prev, typing_speed_ms: Number(raw) }));
+                          }
+                        }}
+                        onBlur={() => {
+                          const raw = antiBanDrafts.typing_speed_ms;
+                          if (raw !== undefined) {
+                            const val = Math.max(20, Math.min(500, Number(raw) || 150));
+                            setAntiBanConfig(prev => ({ ...prev, typing_speed_ms: val }));
+                            setAntiBanDrafts(prev => {
+                              const next = { ...prev };
+                              delete next.typing_speed_ms;
+                              return next;
+                            });
+                          }
                         }}
                         className="w-16 p-1 border border-zinc-950 text-right font-mono font-black text-xs bg-white"
                       />
@@ -1900,10 +2000,18 @@ export function WhatsAppCampaignPanel({
                     max={300}
                     step={10}
                     value={antiBanConfig.typing_speed_ms}
-                    onChange={(e) => setAntiBanConfig(prev => ({
-                      ...prev,
-                      typing_speed_ms: Number(e.target.value)
-                    }))}
+                    onChange={(e) => {
+                      isConfigDirtyRef.current = true;
+                      setAntiBanDrafts(prev => {
+                        const next = { ...prev };
+                        delete next.typing_speed_ms;
+                        return next;
+                      });
+                      setAntiBanConfig(prev => ({
+                        ...prev,
+                        typing_speed_ms: Number(e.target.value)
+                      }));
+                    }}
                     className="w-full accent-zinc-950 cursor-pointer"
                   />
                 </div>
@@ -1914,16 +2022,38 @@ export function WhatsAppCampaignPanel({
                     <span className="text-[10px] font-mono font-bold text-zinc-700">Duração Mín (s):</span>
                     <input
                       type="number"
+                      inputMode="numeric"
                       min={1}
                       max={30}
-                      value={antiBanConfig.min_typing_sec}
+                      value={antiBanDrafts.min_typing_sec ?? String(antiBanConfig.min_typing_sec)}
                       onChange={(e) => {
-                        const val = Math.max(1, Number(e.target.value));
-                        setAntiBanConfig(prev => ({
-                          ...prev,
-                          min_typing_sec: val,
-                          max_typing_sec: Math.max(val, prev.max_typing_sec)
-                        }));
+                        isConfigDirtyRef.current = true;
+                        const raw = e.target.value;
+                        setAntiBanDrafts(prev => ({ ...prev, min_typing_sec: raw }));
+                        if (raw !== '' && !isNaN(Number(raw)) && Number(raw) >= 1) {
+                          const val = Number(raw);
+                          setAntiBanConfig(prev => ({
+                            ...prev,
+                            min_typing_sec: val,
+                            max_typing_sec: Math.max(val, prev.max_typing_sec)
+                          }));
+                        }
+                      }}
+                      onBlur={() => {
+                        const raw = antiBanDrafts.min_typing_sec;
+                        if (raw !== undefined) {
+                          const val = Math.max(1, Math.min(30, Number(raw) || 1));
+                          setAntiBanConfig(prev => ({
+                            ...prev,
+                            min_typing_sec: val,
+                            max_typing_sec: Math.max(val, prev.max_typing_sec)
+                          }));
+                          setAntiBanDrafts(prev => {
+                            const next = { ...prev };
+                            delete next.min_typing_sec;
+                            return next;
+                          });
+                        }
                       }}
                       className="p-1.5 border border-zinc-950 font-mono text-xs bg-white font-bold"
                     />
@@ -1932,13 +2062,33 @@ export function WhatsAppCampaignPanel({
                     <span className="text-[10px] font-mono font-bold text-zinc-700">Duração Máx (s):</span>
                     <input
                       type="number"
-                      min={antiBanConfig.min_typing_sec}
+                      inputMode="numeric"
+                      min={1}
                       max={60}
-                      value={antiBanConfig.max_typing_sec}
-                      onChange={(e) => setAntiBanConfig(prev => ({
-                        ...prev,
-                        max_typing_sec: Math.max(prev.min_typing_sec, Number(e.target.value))
-                      }))}
+                      value={antiBanDrafts.max_typing_sec ?? String(antiBanConfig.max_typing_sec)}
+                      onChange={(e) => {
+                        isConfigDirtyRef.current = true;
+                        const raw = e.target.value;
+                        setAntiBanDrafts(prev => ({ ...prev, max_typing_sec: raw }));
+                        if (raw !== '' && !isNaN(Number(raw)) && Number(raw) >= 1) {
+                          setAntiBanConfig(prev => ({
+                            ...prev,
+                            max_typing_sec: Number(raw)
+                          }));
+                        }
+                      }}
+                      onBlur={() => {
+                        const raw = antiBanDrafts.max_typing_sec;
+                        if (raw !== undefined) {
+                          const val = Math.max(antiBanConfig.min_typing_sec, Math.min(60, Number(raw) || antiBanConfig.min_typing_sec));
+                          setAntiBanConfig(prev => ({ ...prev, max_typing_sec: val }));
+                          setAntiBanDrafts(prev => {
+                            const next = { ...prev };
+                            delete next.max_typing_sec;
+                            return next;
+                          });
+                        }
+                      }}
                       className="p-1.5 border border-zinc-950 font-mono text-xs bg-white font-bold"
                     />
                   </div>
@@ -1972,17 +2122,37 @@ export function WhatsAppCampaignPanel({
 
               <div className="flex flex-col gap-3">
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-mono font-bold text-zinc-800">Limite Diário (mensagens/dia):</span>
+                  <span className="text-xs font-mono font-bold text-zinc-800">Limite Diário (leads/dia):</span>
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
+                      inputMode="numeric"
                       min={1}
                       max={500}
-                      value={antiBanConfig.daily_limit}
-                      onChange={(e) => setAntiBanConfig(prev => ({
-                        ...prev,
-                        daily_limit: Math.max(1, Number(e.target.value))
-                      }))}
+                      value={antiBanDrafts.daily_limit ?? String(antiBanConfig.daily_limit)}
+                      onChange={(e) => {
+                        isConfigDirtyRef.current = true;
+                        const raw = e.target.value;
+                        setAntiBanDrafts(prev => ({ ...prev, daily_limit: raw }));
+                        if (raw !== '' && !isNaN(Number(raw)) && Number(raw) >= 1) {
+                          setAntiBanConfig(prev => ({
+                            ...prev,
+                            daily_limit: Number(raw)
+                          }));
+                        }
+                      }}
+                      onBlur={() => {
+                        const raw = antiBanDrafts.daily_limit;
+                        if (raw !== undefined) {
+                          const val = Math.max(1, Math.min(500, Number(raw) || 15));
+                          setAntiBanConfig(prev => ({ ...prev, daily_limit: val }));
+                          setAntiBanDrafts(prev => {
+                            const next = { ...prev };
+                            delete next.daily_limit;
+                            return next;
+                          });
+                        }
+                      }}
                       className="w-24 p-2 border-2 border-zinc-950 font-mono text-sm bg-white font-bold"
                     />
                     {/* Quick Pills */}
@@ -1991,7 +2161,16 @@ export function WhatsAppCampaignPanel({
                         <button
                           key={val}
                           type="button"
-                          onClick={() => setAntiBanConfig(prev => ({ ...prev, daily_limit: val }))}
+                          onClick={() => {
+                            const nextConfig = { ...antiBanConfig, daily_limit: val };
+                            setAntiBanDrafts(prev => {
+                              const next = { ...prev };
+                              delete next.daily_limit;
+                              return next;
+                            });
+                            setAntiBanConfig(nextConfig);
+                            void persistConfigPayload(nextConfig, `Limite diário atualizado para ${val} leads/dia!`);
+                          }}
                           className={`px-2 py-1 text-[10px] font-mono font-bold border border-zinc-950 transition-colors ${
                             antiBanConfig.daily_limit === val ? 'bg-[#E5FF00]' : 'bg-white hover:bg-zinc-100'
                           }`}
