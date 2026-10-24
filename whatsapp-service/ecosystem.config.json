@@ -2,9 +2,11 @@
   "apps": [
     {
       "name": "whatsapp-engine",
-      "script": "./whatsapp-service-linux-arm",
+      "script": "./whatsapp-service-linux-arm64",
       "interpreter": "none",
       "autorestart": true,
+      "restart_delay": 3000,
+      "max_restarts": 100,
       "watch": false,
       "max_memory_restart": "250M",
       "env": {
@@ -17,10 +19,11 @@
     },
     {
       "name": "whatsapp-tunnel",
-      "script": "cloudflared",
-      "args": "tunnel --url http://127.0.0.1:5001",
-      "interpreter": "none",
+      "script": "./tunnel.sh",
+      "interpreter": "bash",
       "autorestart": true,
+      "restart_delay": 4000,
+      "max_restarts": 100,
       "watch": false,
       "env": {
         "SSL_CERT_FILE": "/data/data/com.termux/files/usr/etc/tls/cert.pem",

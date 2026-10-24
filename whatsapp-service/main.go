@@ -1123,9 +1123,8 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 	loggedIn := connected && appManager.client.IsLoggedIn() && hasStoreID
 
 	// Auto-recuperação: sem login e sem QR ativo -> reinicia o pareamento
-	// (só quando não há aparelho pareado; após o pareamento o whatsmeow reconecta sozinho)
-	if !loggedIn && qrB64 == "" && appManager.client != nil && !hasStoreID {
-		go appManager.startPairing(false)
+	if !loggedIn && qrB64 == "" && appManager.client != nil {
+		go appManager.startPairing(!hasStoreID)
 	}
 
 	// Se a requisição pedir JSON
@@ -1728,7 +1727,7 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 		log.Println("🔴 [WhatsApp] Sessão desconectada/deslogada pelo celular! Resetando e gerando novo QR...")
 		s.clearQR()
 		s.newClient()
-		go s.startPairing(false)
+		go s.startPairing(true)
 	case *events.PairSuccess:
 		log.Printf("🎉 [WhatsApp] Aparelho pareado com sucesso! JID: %s", evt.ID)
 		s.clearQR()
@@ -1809,7 +1808,7 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 				return
 			}
 
-			client := &http.Client{Timeout: 8 * time.Second}
+			client := &http.Client{Timeout: 6 * time.Second}
 			for _, url := range targets {
 				req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
 				if err != nil {
@@ -1818,12 +1817,15 @@ func (s *ServiceManager) handleEvent(rawEvt any) {
 				req.Header.Set("Content-Type", "application/json")
 				resp, err := client.Do(req)
 				if err != nil {
+					log.Printf("⚠️ [Webhook Forward] Falha ao enviar para %s: %v", url, err)
 					continue
 				}
 				_ = resp.Body.Close()
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					log.Printf("📨 [Webhook] Mensagem de %s entregue ao webhook %s (Status: %d)", phone, url, resp.StatusCode)
+					log.Printf("📨 [Webhook] Mensagem de %s entregue com sucesso ao webhook %s (Status: %d)", phone, url, resp.StatusCode)
 					break
+				} else {
+					log.Printf("⚠️ [Webhook] Webhook %s respondeu com status %d", url, resp.StatusCode)
 				}
 			}
 		}(senderPhone, text, evt.Info.PushName, evt.Info.Sender.String(), evt.Info.Chat.String(), webhookTargets)
@@ -1909,6 +1911,16 @@ func (s *ServiceManager) startPairing(reset bool) {
 				s.qrCodeBase64 = base64.StdEncoding.EncodeToString(pngBytes)
 				s.qrMu.Unlock()
 				log.Println("📱 [QR Code] Novo QR code gerado! Acesse http://localhost:5001/api/qr no navegador")
+
+				// Renderiza o QR Code ASCII no terminal (Termux)
+				qrObj, errQr := qrcode.New(evt.Code, qrcode.Medium)
+				if errQr == nil {
+					fmt.Println("\n=======================================================")
+					fmt.Println("   📱 ESCANEIE ESTE QR CODE NO SEU WHATSAPP (TERMUX):")
+					fmt.Println("=======================================================")
+					fmt.Println(qrObj.ToSmallString(false))
+					fmt.Println("=======================================================\n")
+				}
 			case "success":
 				log.Println("🎉 [QR Code] Login realizado com sucesso via QR Code!")
 				s.clearQR()

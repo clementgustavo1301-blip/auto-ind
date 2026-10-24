@@ -614,23 +614,7 @@ export async function deleteAutomationLead(options: { id?: string; phone?: strin
   const targetPhone = targetLead ? targetLead.phone : (phone || '');
   const targetId = targetLead ? targetLead.id : id;
 
-  // 1. Adiciona o telefone à blacklist permanente para parar imediatamente qualquer disparo ou resposta
-  if (targetPhone) {
-    addPhoneToBlacklist(targetPhone);
-    const currentExcluded = inMemorySettings.excluded_phones || [];
-    if (!currentExcluded.some(p => isSamePhone(p, targetPhone))) {
-      inMemorySettings.excluded_phones = [...currentExcluded, toDialablePhone(targetPhone) || targetPhone];
-      // Salva de forma persistente nas configurações da automação
-      if (supabase) {
-        supabase.from('automation_settings').update({
-          excluded_phones: inMemorySettings.excluded_phones,
-          updated_at: new Date().toISOString()
-        }).neq('id', '00000000-0000-0000-0000-000000000000').then(() => {}, () => {});
-      }
-    }
-  }
-
-  // 2. Se estava simulando digitação para este contato, cancela imediatamente no painel
+  // 1. Se estava simulando digitação para este contato, cancela imediatamente no painel
   const currentTyping = getCurrentlyTyping();
   if (currentTyping && targetPhone && isSamePhone(currentTyping.phone, targetPhone)) {
     setCurrentlyTyping(null);

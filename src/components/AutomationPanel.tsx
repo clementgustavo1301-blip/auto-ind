@@ -205,6 +205,28 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     daily_limit?: number;
   } | null>(null);
   const [copiedTermuxCmd, setCopiedTermuxCmd] = useState(false);
+  const [qrCodeData, setQrCodeData] = useState<{
+    connected?: boolean;
+    logged_in?: boolean;
+    has_qr?: boolean;
+    qr_base64?: string;
+    qr_code?: string;
+  } | null>(null);
+
+  const selectedLeadForChatRef = useRef<AutomationLead | null>(null);
+  useEffect(() => {
+    selectedLeadForChatRef.current = selectedLeadForChat;
+  }, [selectedLeadForChat]);
+
+  const fetchQRCode = useCallback(async () => {
+    try {
+      const res = await fetch('/api/whatsapp/qr', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        setQrCodeData(data);
+      }
+    } catch {}
+  }, []);
 
   useEffect(() => {
     showAntiBanPanelRef.current = showAntiBanPanel;
@@ -231,6 +253,16 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         setMetrics(data.metrics);
         setLeads(data.leads || []);
         setLogs(data.logs || []);
+
+        if (selectedLeadForChatRef.current) {
+          const currentPhone = selectedLeadForChatRef.current.phone;
+          const currentId = selectedLeadForChatRef.current.id;
+          const updated = (data.leads || []).find((l: AutomationLead) => l.id === currentId || isSamePhone(l.phone, currentPhone));
+          if (updated) {
+            setSelectedLeadForChat(updated);
+          }
+        }
+
         if (data.whatsapp_status) {
           setWaServiceStatus(data.whatsapp_status);
         }
@@ -281,12 +313,14 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
   useEffect(() => {
     fetchStatus();
     fetchAntiBanConfig(true);
+    fetchQRCode();
     const interval = setInterval(() => {
       fetchStatus();
       fetchAntiBanConfig(false);
-    }, 6000);
+      fetchQRCode();
+    }, 4000);
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchAntiBanConfig]);
+  }, [fetchStatus, fetchAntiBanConfig, fetchQRCode]);
 
   // Foca automaticamente no lead qualificado quando o usuário clica na notificação / pop-up
   const lastFocusedPhoneRef = useRef<string | null>(null);
@@ -406,11 +440,17 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         soundEngine.playSentNotification();
         setReplyFeedback(`✅ Resposta registrada! Lead atualizado para [${data.qualification?.qualificationStatus?.toUpperCase() || 'EM CONVERSA'}].`);
         await fetchStatus();
+        const repliedPhone = recordReplyForm.phone.trim();
         setTimeout(() => {
           setIsRecordReplyModalOpen(false);
           setRecordReplyForm({ phone: '', message: '' });
           setReplyFeedback(null);
-        }, 1800);
+          const target = leads.find(l => isSamePhone(l.phone, repliedPhone));
+          if (target) {
+            setSelectedLeadForChat(target);
+            fetchLeadMessages(target.phone);
+          }
+        }, 1200);
       } else {
         alert('Erro ao registrar resposta: ' + (data.error || 'Falha no webhook'));
       }
@@ -1100,6 +1140,35 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
           </button>
 
           <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('leadcore:test-qualified-popup'));
+              }
+            }}
+            className="px-3 sm:px-3.5 py-2.5 bg-[#25D366]/20 hover:bg-[#25D366] text-[#25D366] hover:text-zinc-950 border-2 border-[#25D366] font-mono text-[11px] sm:text-xs font-black uppercase tracking-wide flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            title="Disparar um Pop-up e Notificação Push de teste no celular"
+          >
+            <Flame className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Testar Pop-up</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playMechanicalClick('secondary');
+              const lastLead = leads.find(l => l.status === 'sent' || l.status === 'chatting') || leads[0];
+              setRecordReplyForm({ phone: lastLead?.phone || '', message: '' });
+              setIsRecordReplyModalOpen(true);
+            }}
+            className="px-3 sm:px-3.5 py-2.5 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border-2 border-emerald-600 font-mono text-[11px] sm:text-xs font-black uppercase tracking-wide flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            title="Simular ou registrar resposta recebida de um lead (testar IA SDR)"
+          >
+            <MessageSquare className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+            <span className="truncate">+ Resposta IA</span>
+          </button>
+
+          <button
             onClick={() => {
               soundEngine.playMechanicalClick('secondary');
               if (settings) {
@@ -1137,6 +1206,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                 soundEngine.playMechanicalClick('secondary');
                 fetchStatus();
                 fetchAntiBanConfig(true);
+                fetchQRCode();
               }}
               className="flex-1 sm:flex-initial p-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-2 border-zinc-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer font-mono text-[11px] font-bold uppercase"
               title="Atualizar dados"
@@ -1147,6 +1217,72 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
           </div>
         </div>
       </div>
+
+      {/* CARD DE CONEXÃO WHATSAPP / QR CODE (EXIBIDO SE DESCONECTADO OU AGUARDANDO ESCANEAMENTO) */}
+      {(!waServiceStatus?.connected || !waServiceStatus?.logged_in) && (
+        <div className="bg-zinc-950 border-4 border-[#E5FF00] p-4 sm:p-5 shadow-[8px_8px_0_0_#18181B] font-mono text-xs text-zinc-200">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-5">
+            <div className="flex-1 space-y-2.5 text-center md:text-left">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-amber-500/10 border border-amber-500/40 text-amber-300 text-[10px] font-black uppercase">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+                <span>WhatsApp Desconectado • Escanear QR Code</span>
+              </div>
+              <h3 className="text-base sm:text-lg font-black uppercase tracking-wide text-zinc-100">
+                Conecte seu WhatsApp para Iniciar os Disparos e Escuta da IA
+              </h3>
+              <p className="text-[11px] text-zinc-400 leading-relaxed max-w-xl">
+                1. Abra o WhatsApp no celular que fará os envios.<br />
+                2. Vá em <strong>Aparelhos Conectados &gt; Conectar um Aparelho</strong>.<br />
+                3. Aponte a câmera para o QR Code ao lado. O sistema conectará automaticamente sem precisar de senha.
+              </p>
+              <div className="pt-2 flex items-center gap-2 flex-wrap justify-center md:justify-start">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cmd = `curl -sSL https://auto-ind.vercel.app/setup-autostart.sh | bash`;
+                    navigator.clipboard.writeText(cmd);
+                    setCopiedTermuxCmd(true);
+                    setTimeout(() => setCopiedTermuxCmd(false), 4000);
+                  }}
+                  className="px-3.5 py-2 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-black uppercase text-[11px] border border-zinc-950 shadow-[2px_2px_0_0_#fff] cursor-pointer"
+                >
+                  {copiedTermuxCmd ? '✓ Comando Copiado!' : '📋 Copiar Comando Termux (Auto-Start 24/7)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await fetch('/api/whatsapp/disconnect', { method: 'POST' });
+                    fetchQRCode();
+                    fetchStatus();
+                  }}
+                  className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold uppercase text-[11px] border border-zinc-700 cursor-pointer"
+                >
+                  🔄 Gerar Novo QR Code
+                </button>
+              </div>
+            </div>
+
+            {/* Imagem do QR Code ou Carregamento */}
+            <div className="shrink-0 flex flex-col items-center">
+              <div className="p-3 bg-white border-4 border-zinc-950 shadow-[4px_4px_0_0_#E5FF00] flex items-center justify-center min-w-[180px] min-h-[180px]">
+                {qrCodeData?.qr_base64 ? (
+                  <img
+                    src={`data:image/png;base64,${qrCodeData.qr_base64}`}
+                    alt="WhatsApp QR Code"
+                    className="w-44 h-44 sm:w-48 sm:h-48 object-contain"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-zinc-600 text-center p-4">
+                    <div className="w-8 h-8 border-3 border-zinc-400 border-t-[#E5FF00] rounded-full animate-spin" />
+                    <span className="text-[10px] font-bold uppercase">Gerando QR Code...</span>
+                  </div>
+                )}
+              </div>
+              <span className="text-[10px] text-zinc-500 font-mono mt-1.5">Auto-atualização ativa</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* FEEDBACK DE EXECUÇÃO DO CICLO */}
       <AnimatePresence>
@@ -2240,6 +2376,53 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                     <X className="w-5 h-5" />
                   </button>
                 </div>
+              </div>
+
+              {/* Briefing da IA & Informações do Lead */}
+              <div className="p-3 sm:p-3.5 bg-zinc-900/90 border-b-2 border-zinc-900 flex flex-col gap-2 font-mono text-xs">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-bold text-zinc-400">
+                      📋 Briefing:
+                    </span>
+                    <span className="text-zinc-200 font-bold">
+                      {selectedLeadForChat.segment || 'Geral'} • {selectedLeadForChat.city}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-0.5 text-[10px] font-black uppercase border ${
+                      selectedLeadForChat.status === 'qualified'
+                        ? 'bg-amber-950/80 text-amber-300 border-amber-600'
+                        : selectedLeadForChat.status === 'chatting'
+                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600'
+                        : 'bg-zinc-800 text-zinc-300 border-zinc-700'
+                    }`}>
+                      {selectedLeadForChat.status === 'qualified' ? '🔥 QUALIFICADO' : selectedLeadForChat.status === 'chatting' ? '💬 EM CONVERSA' : selectedLeadForChat.status.toUpperCase()}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playMechanicalClick('secondary');
+                        setRecordReplyForm({ phone: selectedLeadForChat.phone, message: '' });
+                        setIsRecordReplyModalOpen(true);
+                      }}
+                      className="px-2 py-0.5 bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-600 text-[10px] font-bold uppercase transition-colors cursor-pointer"
+                      title="Simular ou registrar nova resposta deste lead"
+                    >
+                      + Simular Resposta
+                    </button>
+                  </div>
+                </div>
+
+                {selectedLeadForChat.qualification_notes ? (
+                  <div className="p-2.5 bg-amber-950/30 border-l-4 border-[#E5FF00] text-amber-200 text-[11px] leading-relaxed">
+                    💡 <strong>Resumo da IA:</strong> {selectedLeadForChat.qualification_notes}
+                  </div>
+                ) : (
+                  <div className="p-2 bg-zinc-950/60 border border-zinc-800 text-zinc-400 text-[11px]">
+                    ℹ️ Disparo inicial efetuado. Aguardando a primeira resposta deste lead no WhatsApp.
+                  </div>
+                )}
               </div>
 
               {/* Mensagens */}
