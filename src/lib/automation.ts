@@ -723,6 +723,52 @@ export async function deleteDisqualifiedLeads(): Promise<number> {
 }
 
 /**
+ * Verifica leads em espera de resposta (status 'sent' ou 'chatting') que estão inativos há mais de 24 horas
+ * e os desqualifica automaticamente ("se parar de responder, desqualifica").
+ */
+export async function checkAndDisqualifyInactiveLeads(): Promise<number> {
+  const leads = await getAutomationLeads();
+  const now = Date.now();
+  const INACTIVITY_MS = 24 * 60 * 60 * 1000; // 24 horas
+  let disqualifiedCount = 0;
+
+  for (const lead of leads) {
+    // Apenas leads ativos em espera: 'sent' (aguardando 1ª resposta) ou 'chatting' (em conversa)
+    if (lead.status !== 'sent' && lead.status !== 'chatting') continue;
+    // Se o operador humano já assumiu, não desqualifica
+    if (lead.human_takeover) continue;
+    // Se já está com interesse alto, não desqualifica
+    if (lead.interest_level === 'high') continue;
+
+    // Determina o horário da última interação
+    let lastInteractionTime = 0;
+    if (lead.last_reply_at) {
+      lastInteractionTime = new Date(lead.last_reply_at).getTime();
+    } else if (lead.dispatched_at) {
+      lastInteractionTime = new Date(lead.dispatched_at).getTime();
+    }
+
+    if (lastInteractionTime > 0 && (now - lastInteractionTime) >= INACTIVITY_MS) {
+      const hoursInactive = Math.round((now - lastInteractionTime) / (1000 * 60 * 60));
+      await updateAutomationLead(lead.phone, {
+        status: 'disqualified',
+        interest_level: 'none',
+        qualification_notes: `Desqualificado automaticamente: parou de responder há ${hoursInactive}h.`
+      });
+
+      await addAutomationLog(
+        'disqualified',
+        `⏱️ Lead "${lead.company_name}" (${formatPhoneDisplay(lead.phone)}) desqualificado por inatividade (sem resposta há ${hoursInactive}h).`,
+        lead.phone
+      );
+      disqualifiedCount++;
+    }
+  }
+
+  return disqualifiedCount;
+}
+
+/**
  * Registra uma mensagem na thread de conversa
  */
 export async function addAutomationMessage(
@@ -1123,10 +1169,11 @@ async function executeAutomationCycleInternal(options: {
   const skipSearch = typeof options === 'object' ? Boolean(options?.skipSearch) : false;
   const targetLeadId = typeof options === 'object' ? options?.targetLeadId : undefined;
 
-  // 0. Sincroniza mensagens recebidas no WhatsApp em qualquer invocação (mesmo com app fechado)
+  // 0. Sincroniza mensagens recebidas no WhatsApp e avalia inatividade de leads (> 24h)
   try {
     const { syncInboundWhatsAppMessages } = await import('./aiSdr');
     await syncInboundWhatsAppMessages();
+    await checkAndDisqualifyInactiveLeads();
   } catch {
     // Continua
   }

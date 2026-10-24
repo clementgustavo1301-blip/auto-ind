@@ -193,13 +193,26 @@ function analyzeHeuristic(
     };
   }
 
-  // 2. Padrões de Interesse Explícito (Qualifica APENAS se disser claramente que tem interesse ou solicitar cotação/proposta)
+  // 2. Padrões de Interesse Explícito (Qualifica se disser que quer o serviço, quer saber mais ou pedir proposta)
   const explicitInterestPatterns = [
-    'tenho interesse', 'temos interesse', 'tenho sim', 'temos sim',
-    'quero saber mais', 'quero entender mais', 'quero proposta', 'quero cotacao', 'quero cotação',
-    'me manda a tabela', 'manda a tabela', 'envia a tabela', 'pode mandar a tabela',
-    'quanto custa', 'qual o valor', 'qual o preco', 'qual o preço',
-    'gostaria de uma cotacao', 'gostaria de uma cotação', 'pode mandar', 'pode enviar',
+    // Interesse explícito
+    'tenho interesse', 'temos interesse', 'tenho sim', 'temos sim', 'tenho mto interesse',
+    // Quer saber mais sobre o serviço / entender melhor
+    'quero saber mais', 'quero entender mais', 'saber mais', 'entender mais',
+    'quero saber mais sobre o servico', 'quero saber mais sobre o serviço',
+    'como funciona o servico', 'como funciona o serviço', 'como funciona',
+    'como e o servico', 'como é o serviço', 'como voces trabalham', 'como vocês trabalham',
+    'o que voces fazem', 'o que vocês fazem', 'quais servicos', 'quais serviços',
+    'me explica melhor', 'me passe mais detalhes', 'mais detalhes', 'mais informacoes', 'mais informações',
+    'gostaria de saber mais', 'gostaria de entender melhor', 'gostaria de conhecer',
+    // Quer o serviço / contratação
+    'quero o servico', 'quero o serviço', 'quero os servicos', 'quero os serviços',
+    'quero contratar', 'quero fazer', 'pode fazer', 'vamos fazer', 'vamos fechar',
+    'tenho interesse em fazer', 'tenho interesse em contratar', 'preciso do servico', 'preciso do serviço',
+    // Proposta, valores e orçamento
+    'quero proposta', 'quero cotacao', 'quero cotação', 'me manda a tabela', 'manda a tabela',
+    'envia a tabela', 'pode mandar a tabela', 'quanto custa', 'qual o valor', 'qual o preco',
+    'qual o preço', 'gostaria de uma cotacao', 'gostaria de uma cotação', 'pode mandar', 'pode enviar',
     'solicito orcamento', 'solicito orçamento', 'me liga', 'pode ligar', 'orçamento', 'orcamento'
   ];
 
@@ -217,15 +230,15 @@ function analyzeHeuristic(
         replyMessage: `Perfeito!\n\nNós fornecemos sal industrial direto com entrega programada e laudo técnico.\n\nQual a estimativa de consumo mensal ou tipo de sal (grosso, moído ou refinado) que a ${lead.company_name} mais consome? Nosso consultor já vai formalizar a tabela para vocês.`,
         interestLevel: 'high',
         qualificationStatus: 'qualified',
-        notes: `Lead declarou interesse explícito em cotação/produtos: "${incomingText.slice(0, 100)}"`,
+        notes: `Lead solicitou informações do serviço / declarou interesse: "${incomingText.slice(0, 100)}"`,
         shouldNotifyHuman: true
       };
     }
     return {
-      replyMessage: `Perfeito!\n\nNós desenvolvemos sites institucionais de alta conversão, sistemas sob medida e estratégias de SEO para o Google e IAs.\n\nVocês já têm um site que gostariam de modernizar ou seria um projeto novo para a ${lead.company_name}? O Gustavo pode preparar uma prévia de proposta personalizada para vocês.`,
+      replyMessage: `Perfeito!\n\nNós desenvolvemos sites institucionais de alta conversão, landing pages e estratégias de SEO para o Google e IAs.\n\nVocês já têm um site que gostariam de modernizar ou seria um projeto novo para a ${lead.company_name}? O Gustavo vai preparar uma prévia de proposta personalizada para vocês.`,
       interestLevel: 'high',
       qualificationStatus: 'qualified',
-      notes: `Lead declarou interesse explícito em serviços: "${incomingText.slice(0, 100)}"`,
+      notes: `Lead solicitou informações do serviço / declarou interesse: "${incomingText.slice(0, 100)}"`,
       shouldNotifyHuman: true
     };
   }
@@ -283,9 +296,14 @@ REGRAS DE VERACIDADE E LOCALIZAÇÃO (RIGOR ABSOLUTO - NÃO INVENTE NADA):
 - LOCALIZAÇÃO (MOSSORÓ - RN APENAS SE PERGUNTAREM): Você/Gustavo é de Mossoró - RN (e atende empresas de todo o Brasil). Porém, você SÓ deve falar que é de Mossoró - RN SE o lead perguntar explicitamente de onde você é, qual sua cidade ou onde fica a empresa. Se o lead NÃO perguntar de onde você é, NUNCA mencione Mossoró por conta própria.
 
 REGRAS OBRIGATÓRIAS E RESTRITAS DE STATUS (SIGA COM RIGOR ABSOLUTO):
-1. "qualified": Atribua "qualified" (e interestLevel "high") EXCLUSIVAMENTE se o lead declarou EXPRESSAMENTE que TEM INTERESSE (ex: "tenho interesse", "quero saber mais", "pode mandar uma proposta", "quanto custa?", "me envia a cotação/tabela").
-2. "disqualified": Atribua "disqualified" (e interestLevel "none") se o lead disse que NÃO TEM INTERESSE, que não quer, que já tem fornecedor/site/equipe ou pediu para retirar. A resposta da IA deve ser breve, cordial e agradecendo pelo tempo.
-3. "chatting": Para QUALQUER outra resposta (como "sim", "olá", "bom dia", "teste", "quem é?", "como funciona?"), o status DEVE ser estritamente "chatting" (interestLevel "medium"). NUNCA qualifique antes do lead declarar interesse explícito!
+1. "qualified": Atribua "qualified" (e interestLevel "high") e defina "shouldNotifyHuman": true IMEDIATAMENTE se o lead:
+   - Disse que QUER O SERVIÇO ou quer contratar (ex: "quero o serviço", "quero contratar", "quero fazer", "pode fazer", "vamos fechar", "tenho interesse em fazer").
+   - OU disse que QUER SABER MAIS SOBRE O SERVIÇO / entender melhor (ex: "quero saber mais", "como funciona o serviço?", "me explica melhor", "quais os serviços?", "o que vocês fazem?").
+   - OU pediu valores/proposta/tabela (ex: "quanto custa?", "qual o valor?", "me manda a tabela/orçamento").
+   - OU declarou expressamente que tem interesse (ex: "tenho interesse", "temos interesse", "tenho sim").
+   Sua resposta deve ser animadora, cordial e avisar que o Gustavo entrará em contato para alinhar os detalhes e proposta personalizada.
+2. "disqualified": Atribua "disqualified" (e interestLevel "none") se o lead disse que NÃO TEM INTERESSE, que não quer, que já tem fornecedor/site/equipe ou pediu para retirar o número. A resposta da IA deve ser breve, cordial e agradecendo pelo tempo.
+3. "chatting": Para QUALQUER outra resposta (como saudações "olá", "bom dia", "tudo bem?", dúvidas gerais, "quem é?", "é você quem faz?"), o status DEVE ser estritamente "chatting" (interestLevel "medium"). A IA deve conduzir a conversa amigavelmente apresentando os serviços e convidando o lead a conhecer mais.
 4. "handoff": Se no histórico você já avisou que o Gustavo (ou consultor) entrará em contato:
    - Se o lead agradecer ou confirmar (ex: "obrigado", "valeu", "ok", "perfeito", "combinado", "aguardo", "show"):
      Responda apenas com uma cordialidade breve e finalizadora (ex: "Por nada! Em breve o Gustavo fala com você. Tenha um excelente dia! 😊").
@@ -516,12 +534,20 @@ export async function processIncomingWhatsAppMessage(
 
   // 6. 🛡️ Se o contato JÁ ESTÁ desqualificado, a IA NÃO deve enviar novas mensagens
   if (lead.status === 'disqualified' || lead.interest_level === 'none') {
-    await addAutomationMessage(targetPhone, 'inbound', 'lead', trimmedText);
-    await updateAutomationLead(targetPhone, {
-      last_reply_at: nowIso
-    });
-    await addAutomationLog('reply', `💬 Mensagem de contato desqualificado (${lead.company_name}): "${trimmedText.slice(0, 80)}" (IA não responde contatos desqualificados)`, targetPhone);
-    return { success: true, replied: false, lead };
+    const wasInactiveDisqualified = (lead.qualification_notes || '').toLowerCase().includes('inatividade') ||
+                                    (lead.qualification_notes || '').toLowerCase().includes('parou de responder');
+    if (!wasInactiveDisqualified) {
+      await addAutomationMessage(targetPhone, 'inbound', 'lead', trimmedText);
+      await updateAutomationLead(targetPhone, {
+        last_reply_at: nowIso
+      });
+      await addAutomationLog('reply', `💬 Mensagem de contato desqualificado (${lead.company_name}): "${trimmedText.slice(0, 80)}" (IA não responde contatos desqualificados)`, targetPhone);
+      return { success: true, replied: false, lead };
+    }
+    // Se foi desqualificado apenas por inatividade e voltou a responder, reativa imediatamente para 'chatting'
+    console.log(`[AI SDR Reativação] Lead ${lead.company_name} voltou a responder após inatividade. Reativando para 'chatting'.`);
+    lead.status = 'chatting';
+    lead.interest_level = 'medium';
   }
 
   // Registra mensagem recebida no histórico apenas para leads legítimos e ativos

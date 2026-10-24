@@ -7,7 +7,8 @@ import {
   calculateNextDispatchSchedule,
   getCurrentlyTyping,
   setCurrentlyTyping,
-  ensureAutomationWorkerRunning
+  ensureAutomationWorkerRunning,
+  checkAndDisqualifyInactiveLeads
 } from '@/lib/automation';
 import { getWhatsAppQueue, getWhatsAppStatus, setDetectedAppOrigin, updateWhatsAppConfig } from '@/lib/whatsapp';
 import { isSamePhone } from '@/lib/phone';
@@ -23,6 +24,7 @@ export async function GET(request: Request) {
     } catch {}
     ensureAutomationWorkerRunning();
     await syncInboundWhatsAppMessages().catch(() => 0);
+    await checkAndDisqualifyInactiveLeads().catch(() => 0);
 
     const [settings, metrics, leads, logs, waQueue, waStatus, qualifiedAlerts] = await Promise.all([
       getAutomationSettings(),
