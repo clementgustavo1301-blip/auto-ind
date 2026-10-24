@@ -29,7 +29,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo Packaging tar.gz...
-tar -czvf whatsapp-termux.tar.gz whatsapp-service-linux-arm64 whatsapp-service-linux-arm termux-setup.sh
+tar -czvf whatsapp-termux.tar.gz whatsapp-service-linux-arm64 whatsapp-service-linux-arm termux-setup.sh antiban_config.json ecosystem.config.json ecosystem.config.js
 if not exist "..\public" mkdir "..\public"
 copy /y whatsapp-termux.tar.gz ..\public\whatsapp-termux.tar.gz
 

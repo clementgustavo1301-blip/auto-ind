@@ -1013,6 +1013,7 @@ func (s *ServiceManager) getAutomationTargetURLs() []string {
 			addTarget(envWebhook[:idx])
 		}
 	}
+	addTarget("https://auto-ind.vercel.app")
 	addTarget("http://localhost:3000")
 
 	return targets
@@ -1714,6 +1715,7 @@ func (s *ServiceManager) getWebhookTargetURLs() []string {
 	if envApp := os.Getenv("APP_URL"); envApp != "" {
 		addURL(strings.TrimRight(strings.TrimSpace(envApp), "/") + "/api/whatsapp/webhook")
 	}
+	addURL("https://auto-ind.vercel.app/api/whatsapp/webhook")
 	addURL("http://localhost:3000/api/whatsapp/webhook")
 	return urls
 }

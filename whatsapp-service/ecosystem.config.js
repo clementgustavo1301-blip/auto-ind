@@ -10,7 +10,9 @@ module.exports = {
       env: {
         PORT: "5001",
         SSL_CERT_FILE: "/data/data/com.termux/files/usr/etc/tls/cert.pem",
-        SSL_CERT_DIR: "/data/data/com.termux/files/usr/etc/tls/certs"
+        SSL_CERT_DIR: "/data/data/com.termux/files/usr/etc/tls/certs",
+        WEBHOOK_URL: "https://auto-ind.vercel.app/api/whatsapp/webhook",
+        APP_URL: "https://auto-ind.vercel.app"
       }
     },
     {

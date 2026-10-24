@@ -93,7 +93,9 @@ cat <<EOF > ecosystem.config.json
       "env": {
         "PORT": "5001",
         "SSL_CERT_FILE": "$CERT_FILE",
-        "SSL_CERT_DIR": "$CERT_DIR"
+        "SSL_CERT_DIR": "$CERT_DIR",
+        "WEBHOOK_URL": "https://auto-ind.vercel.app/api/whatsapp/webhook",
+        "APP_URL": "https://auto-ind.vercel.app"
       }
     },
     {
