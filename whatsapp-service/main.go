@@ -1122,9 +1122,10 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 	hasStoreID := appManager.client != nil && appManager.client.Store != nil && appManager.client.Store.ID != nil
 	loggedIn := connected && appManager.client.IsLoggedIn() && hasStoreID
 
-	// Auto-recuperação: sem login e sem QR ativo -> reinicia o pareamento
-	if !loggedIn && qrB64 == "" && appManager.client != nil {
-		go appManager.startPairing(!hasStoreID)
+	// Auto-recuperação imediata: se não está logado, garante início/reset do ciclo de QR Code
+	if !loggedIn && appManager.client != nil {
+		needsReset := hasStoreID || qrB64 == ""
+		go appManager.startPairing(needsReset)
 	}
 
 	// Se a requisição pedir JSON
@@ -1850,13 +1851,9 @@ func (s *ServiceManager) newClient() {
 	s.pairMu.Unlock()
 }
 
-// startPairing mantém um QR válido até o login. Apenas uma instância roda por vez.
-// reset=true descarta o aparelho atual (usar somente após logout explícito).
+// startPairing mantém um QR válido continuamente até o login. Apenas uma instância roda por vez.
+// reset=true descarta o aparelho atual (usar somente após logout explícito ou troca de sessão).
 func (s *ServiceManager) startPairing(reset bool) {
-	if reset {
-		s.newClient()
-	}
-
 	s.pairMu.Lock()
 	if s.pairing {
 		s.pairMu.Unlock()
@@ -1875,11 +1872,16 @@ func (s *ServiceManager) startPairing(reset bool) {
 		cli := s.client
 		s.pairMu.Unlock()
 
-		if cli == nil {
-			time.Sleep(500 * time.Millisecond)
-			continue
+		if cli == nil || reset || (cli.Store != nil && cli.Store.ID != nil && !cli.IsLoggedIn()) {
+			s.newClient()
+			s.pairMu.Lock()
+			cli = s.client
+			s.pairMu.Unlock()
+			reset = false
 		}
+
 		if cli.IsConnected() && cli.IsLoggedIn() && cli.Store != nil && cli.Store.ID != nil {
+			log.Println("✅ [QR Code] WhatsApp já está conectado e autenticado.")
 			return
 		}
 		if cli.IsConnected() {
@@ -1888,14 +1890,14 @@ func (s *ServiceManager) startPairing(reset bool) {
 
 		qrChan, err := cli.GetQRChannel(s.ctx)
 		if err != nil {
-			log.Printf("⚠️ [QR Code] Falha ao abrir canal de QR: %v. Recriando cliente...", err)
+			log.Printf("⚠️ [QR Code] Falha ao abrir canal de QR: %v. Recriando cliente limpo...", err)
 			s.newClient()
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 		if err := cli.Connect(); err != nil {
-			log.Printf("⚠️ [QR Code] Falha ao conectar: %v. Tentando novamente...", err)
-			time.Sleep(3 * time.Second)
+			log.Printf("⚠️ [QR Code] Falha ao conectar rede WhatsApp: %v. Tentando novamente...", err)
+			time.Sleep(2 * time.Second)
 			continue
 		}
 
@@ -1910,7 +1912,7 @@ func (s *ServiceManager) startPairing(reset bool) {
 				s.qrCodeRaw = evt.Code
 				s.qrCodeBase64 = base64.StdEncoding.EncodeToString(pngBytes)
 				s.qrMu.Unlock()
-				log.Println("📱 [QR Code] Novo QR code gerado! Acesse http://localhost:5001/api/qr no navegador")
+				log.Println("📱 [QR Code] Novo QR code gerado! Acesse /api/qr no navegador")
 
 				// Renderiza o QR Code ASCII no terminal (Termux)
 				qrObj, errQr := qrcode.New(evt.Code, qrcode.Medium)
@@ -1926,13 +1928,15 @@ func (s *ServiceManager) startPairing(reset bool) {
 				s.clearQR()
 				return
 			default:
-				log.Printf("⏱️ [QR Code] Canal encerrado (%s). Gerando novo ciclo de QR...", evt.Event)
+				log.Printf("⏱️ [QR Code] Ciclo de QR encerrado (%s). Gerando novo ciclo imediatamente...", evt.Event)
 				s.clearQR()
 			}
 		}
 
+		// Se o canal expirou ou fechou sem login, desconecta e abre novo canal limpo
 		cli.Disconnect()
-		time.Sleep(time.Second)
+		s.newClient()
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -1983,9 +1987,39 @@ func main() {
 		log.Printf("🔑 [WhatsApp] Sessão existente encontrada (%s). Conectando...", appManager.client.Store.ID)
 		err = appManager.client.Connect()
 		if err != nil {
-			log.Fatalf("❌ Falha ao reconectar cliente WhatsApp: %v", err)
+			log.Printf("⚠️ Falha ao reconectar cliente WhatsApp (%v). Resetando sessão e gerando novo QR...", err)
+			go appManager.startPairing(true)
 		}
 	}
+
+	// 3.5 Watchdog de Pareamento Contínuo 24/7 (Garante que se desconectar, gera QR automaticamente)
+	go func() {
+		ticker := time.NewTicker(6 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if appManager.client == nil {
+					go appManager.startPairing(true)
+					continue
+				}
+				isConn := appManager.client.IsConnected()
+				isLog := appManager.client.IsLoggedIn()
+				hasID := appManager.client.Store != nil && appManager.client.Store.ID != nil
+				if !isConn || !isLog || !hasID {
+					appManager.qrMu.RLock()
+					hasQR := appManager.qrCodeBase64 != ""
+					appManager.qrMu.RUnlock()
+					if !hasQR {
+						log.Println("🔄 [Watchdog] WhatsApp desconectado sem QR ativo. Iniciando ciclo de pareamento...")
+						go appManager.startPairing(!hasID)
+					}
+				}
+			}
+		}
+	}()
 
 	// 4. Iniciar Worker Sequencial da Fila e Heartbeat Autônomo 24/7 em Background
 	go appManager.startQueueWorker(ctx)
