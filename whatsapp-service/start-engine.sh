@@ -7,13 +7,24 @@ export APP_URL="https://auto-ind.vercel.app"
 
 cd "$(dirname "$0")"
 
-if [ -f "./whatsapp-service-linux-arm64" ]; then
-  chmod +x ./whatsapp-service-linux-arm64
-  exec ./whatsapp-service-linux-arm64
-elif [ -f "./whatsapp-service-linux-arm" ]; then
-  chmod +x ./whatsapp-service-linux-arm
-  exec ./whatsapp-service-linux-arm
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+  BIN="./whatsapp-service-linux-arm64"
 else
-  echo "❌ Binário whatsapp-service não encontrado!"
-  exit 1
+  BIN="./whatsapp-service-linux-arm"
 fi
+
+if [ ! -f "$BIN" ]; then
+  # Fallback caso o nome esteja diferente
+  if [ -f "./whatsapp-service-bin" ]; then
+    BIN="./whatsapp-service-bin"
+  elif [ -f "./whatsapp-service-linux-arm" ]; then
+    BIN="./whatsapp-service-linux-arm"
+  else
+    BIN="./whatsapp-service-linux-arm64"
+  fi
+fi
+
+chmod +x "$BIN" 2>/dev/null || true
+echo "Iniciando motor WhatsApp com binário: $BIN (Arquitetura: $ARCH)..."
+exec "$BIN"

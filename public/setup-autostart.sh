@@ -1,5 +1,4 @@
 #!/data/data/com.termux/files/usr/bin/bash
-set -e
 
 echo ""
 echo "=========================================================="
@@ -56,7 +55,8 @@ chmod +x whatsapp-service-linux-* *.sh 2>/dev/null || true
 # 6. Inicia motor e túnel juntos no PM2
 echo "⚡ [5/5] Iniciando whatsapp-engine e whatsapp-tunnel no PM2..."
 pm2 delete all 2>/dev/null || true
-pm2 start ecosystem.config.json
+pm2 start ./start-engine.sh --name whatsapp-engine --interpreter bash
+pm2 start ./start-tunnel.sh --name whatsapp-tunnel --interpreter bash
 pm2 save
 
 # 7. Configura inicialização automática no boot do Android (quando desligar/descarregar)
@@ -66,7 +66,7 @@ cat << 'EOF' > ~/.termux/boot/start-whatsapp.sh
 termux-wake-lock 2>/dev/null || true
 sleep 4
 cd $HOME/whatsapp-service
-pm2 resurrect || pm2 start ecosystem.config.json
+pm2 resurrect || (pm2 start ./start-engine.sh --name whatsapp-engine --interpreter bash && pm2 start ./start-tunnel.sh --name whatsapp-tunnel --interpreter bash)
 EOF
 chmod +x ~/.termux/boot/start-whatsapp.sh
 
@@ -92,10 +92,15 @@ echo "   👉 https://auto-ind.vercel.app"
 echo ""
 pm2 status
 echo ""
+echo "⏳ Aguardando inicialização para exibir QR Code / Logs..."
+sleep 3
+echo "=========================================================="
+pm2 logs --lines 15 --nostream || true
+echo "=========================================================="
 echo "👉 Dicas úteis:"
-echo "   - Ver logs e QR code:  pm2 logs whatsapp-engine"
-echo "   - Ver logs do túnel:   pm2 logs whatsapp-tunnel"
-echo "   - Ver status do PM2:   pm2 status"
-echo "   - Reiniciar ambos:     pm2 restart all"
+echo "   - Ver logs e QR code em tempo real:  pm2 logs whatsapp-engine"
+echo "   - Ver logs do túnel em tempo real:   pm2 logs whatsapp-tunnel"
+echo "   - Ver status do PM2:                 pm2 status"
+echo "   - Reiniciar ambos:                   pm2 restart all"
 echo "=========================================================="
 

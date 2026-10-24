@@ -3,6 +3,7 @@
     {
       "name": "whatsapp-engine",
       "script": "./start-engine.sh",
+      "interpreter": "bash",
       "autorestart": true,
       "restart_delay": 3000,
       "max_restarts": 100,
@@ -11,6 +12,7 @@
     {
       "name": "whatsapp-tunnel",
       "script": "./start-tunnel.sh",
+      "interpreter": "bash",
       "autorestart": true,
       "restart_delay": 4000,
       "max_restarts": 100,
