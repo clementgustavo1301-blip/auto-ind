@@ -1142,20 +1142,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
           <button
             type="button"
             onClick={() => {
-              if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('leadcore:test-qualified-popup'));
-              }
-            }}
-            className="px-3 sm:px-3.5 py-2.5 bg-[#25D366]/20 hover:bg-[#25D366] text-[#25D366] hover:text-zinc-950 border-2 border-[#25D366] font-mono text-[11px] sm:text-xs font-black uppercase tracking-wide flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            title="Disparar um Pop-up e Notificação Push de teste no celular"
-          >
-            <Flame className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Testar Pop-up</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
               soundEngine.playMechanicalClick('secondary');
               const lastLead = leads.find(l => l.status === 'sent' || l.status === 'chatting') || leads[0];
               setRecordReplyForm({ phone: lastLead?.phone || '', message: '' });
