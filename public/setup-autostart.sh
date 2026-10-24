@@ -12,10 +12,17 @@ termux-wake-lock 2>/dev/null || true
 echo "✅ [1/5] Termux Wake Lock ativado"
 
 # 2. Corrige o erro do Node.js (CANNOT LINK EXECUTABLE "node" / libc++)
-echo "🔧 [2/5] Reparando dependências do Node.js e PM2..."
-pkg install -y libc++ nodejs-lts curl tar 2>/dev/null || pkg install -y libc++ 2>/dev/null || true
-npm install -g pm2 2>/dev/null || true
-echo "✅ [2/5] Node.js e PM2 verificados"
+echo "🔧 [2/5] Verificando dependências do Node.js e PM2..."
+if ! node -v >/dev/null 2>&1; then
+  echo "⚠️ Detectada inconsistência no Node.js. Reparando libc++ e nodejs-lts..."
+  pkg install -y libc++ libandroid-support nodejs-lts
+fi
+
+if ! command -v pm2 >/dev/null 2>&1; then
+  echo "📦 Instalando PM2..."
+  npm install -g pm2
+fi
+echo "✅ [2/5] Node.js e PM2 operacionais"
 
 # 3. Prepara a pasta de trabalho (remove arquivo conflitante se existir)
 TARGET_DIR="$HOME/whatsapp-service"
@@ -25,11 +32,11 @@ fi
 mkdir -p "$TARGET_DIR"
 cd "$TARGET_DIR"
 
-# 4. Para processos antigos no PM2 para evitar 'Text file busy'
+# 4. Para processos antigos no PM2 e fecha túneis órfãos para evitar conflito de domínio e 'Text file busy'
 echo "🛑 [3/5] Parando processos antigos..."
 pm2 stop all 2>/dev/null || true
 pkill -9 -f whatsapp-service 2>/dev/null || true
-pkill -9 -f "ngrok http 5001" 2>/dev/null || true
+pkill -9 -f "ngrok" 2>/dev/null || true
 sleep 1
 rm -f whatsapp-service-linux-* 2>/dev/null || true
 
@@ -37,6 +44,13 @@ rm -f whatsapp-service-linux-* 2>/dev/null || true
 echo "📦 [4/5] Baixando binários atualizados..."
 curl -sSL "https://auto-ind.vercel.app/whatsapp-termux.tar.gz" -o whatsapp-termux.tar.gz
 tar -xzvf whatsapp-termux.tar.gz
+
+# Ajusta arquitetura se o aparelho for ARM 32-bit
+ARCH=$(uname -m)
+if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "arm64" ]; then
+  echo "ℹ️ Arquitetura 32-bit detectada ($ARCH). Configurando binário 32-bit..."
+  cp -f whatsapp-service-linux-arm whatsapp-service-linux-arm64
+fi
 chmod +x whatsapp-service-linux-* 2>/dev/null || true
 
 # 6. Inicia motor e túnel juntos no PM2
@@ -76,3 +90,4 @@ echo "   - Ver logs e QR code:  pm2 logs whatsapp-engine"
 echo "   - Ver status do PM2:   pm2 status"
 echo "   - Reiniciar ambos:     pm2 restart all"
 echo "=========================================================="
+
