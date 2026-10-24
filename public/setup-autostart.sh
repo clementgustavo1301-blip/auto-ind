@@ -51,12 +51,12 @@ if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "arm64" ]; then
   echo "ℹ️ Arquitetura 32-bit detectada ($ARCH). Configurando binário 32-bit..."
   cp -f whatsapp-service-linux-arm whatsapp-service-linux-arm64
 fi
-chmod +x whatsapp-service-linux-* 2>/dev/null || true
+chmod +x whatsapp-service-linux-* *.sh 2>/dev/null || true
 
-# 6. Inicia motor e túnel juntos no PM2 usando JSON (evita erro de ES Module)
+# 6. Inicia motor e túnel juntos no PM2
 echo "⚡ [5/5] Iniciando whatsapp-engine e whatsapp-tunnel no PM2..."
 pm2 delete all 2>/dev/null || true
-pm2 start ecosystem.config.json || pm2 start ecosystem.config.cjs
+pm2 start ecosystem.config.json
 pm2 save
 
 # 7. Configura inicialização automática no boot do Android (quando desligar/descarregar)
@@ -83,10 +83,18 @@ echo ""
 echo "=========================================================="
 echo "  🎉 MOTOR E TÚNEL ESTÃO RODANDO NO PM2!"
 echo "=========================================================="
+echo ""
+echo "🌐 LINK DO TÚNEL NGROK:"
+echo "   👉 https://elusive-deduce-liver.ngrok-free.dev"
+echo ""
+echo "📱 PAINEL DE CONTROLE:"
+echo "   👉 https://auto-ind.vercel.app"
+echo ""
 pm2 status
 echo ""
 echo "👉 Dicas úteis:"
 echo "   - Ver logs e QR code:  pm2 logs whatsapp-engine"
+echo "   - Ver logs do túnel:   pm2 logs whatsapp-tunnel"
 echo "   - Ver status do PM2:   pm2 status"
 echo "   - Reiniciar ambos:     pm2 restart all"
 echo "=========================================================="

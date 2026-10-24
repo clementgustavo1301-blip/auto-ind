@@ -2,26 +2,15 @@ module.exports = {
   apps: [
     {
       name: "whatsapp-engine",
-      script: "./whatsapp-service-linux-arm64",
-      interpreter: "none",
+      script: "./start-engine.sh",
       autorestart: true,
       restart_delay: 3000,
       max_restarts: 100,
-      watch: false,
-      max_memory_restart: "250M",
-      env: {
-        PORT: "5001",
-        SSL_CERT_FILE: "/data/data/com.termux/files/usr/etc/tls/cert.pem",
-        SSL_CERT_DIR: "/data/data/com.termux/files/usr/etc/tls/certs",
-        WEBHOOK_URL: "https://auto-ind.vercel.app/api/whatsapp/webhook",
-        APP_URL: "https://auto-ind.vercel.app"
-      }
+      watch: false
     },
     {
       name: "whatsapp-tunnel",
-      script: "ngrok",
-      args: "http 5001 --domain=elusive-deduce-liver.ngrok-free.dev",
-      interpreter: "none",
+      script: "./start-tunnel.sh",
       autorestart: true,
       restart_delay: 4000,
       max_restarts: 100,
