@@ -468,11 +468,11 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   };
 
-  // Disparar teste exclusivamente para um lead pendente selecionado (sem minerar Google)
+  // Disparar exclusivamente para um lead pendente selecionado (sem minerar Google)
   const handleDispatchSingleLead = async (lead: AutomationLead) => {
     soundEngine.playMechanicalClick('primary');
     setDispatchingLeadId(lead.id);
-    setCycleFeedback(`⚡ Disparando teste para ${lead.company_name}...`);
+    setCycleFeedback(`⚡ Disparando para ${lead.company_name}...`);
     try {
       const res = await fetch('/api/automation/run-cycle', {
         method: 'POST',
@@ -482,7 +482,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
       const data = await res.json();
       if (data.executed) {
         soundEngine.playSentNotification();
-        setCycleFeedback(`✅ Mensagem de teste enviada com sucesso para ${lead.company_name}!`);
+        setCycleFeedback(`✅ Mensagem enviada com sucesso para ${lead.company_name}!`);
       } else {
         setCycleFeedback(`Aviso: ${data.message || data.error || 'Não foi possível disparar'}`);
       }
@@ -2088,10 +2088,10 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                           onClick={() => handleDispatchSingleLead(lead)}
                           disabled={dispatchingLeadId === lead.id}
                           className="px-2.5 py-1.5 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono text-[10px] font-black uppercase flex items-center gap-1 border border-zinc-950 shadow-[2px_2px_0_0_#fff] cursor-pointer disabled:opacity-50"
-                          title="Disparar teste exclusivamente para este lead (sem minerar Google)"
+                          title="Disparar exclusivamente para este lead (sem minerar Google)"
                         >
                           <Zap className="w-3 h-3 fill-current" />
-                          <span>{dispatchingLeadId === lead.id ? 'Enviando...' : '⚡ Disparar Teste'}</span>
+                          <span>{dispatchingLeadId === lead.id ? 'Enviando...' : 'Disparar'}</span>
                         </button>
                       )}
 
@@ -3019,7 +3019,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                       className="px-4 py-2 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono font-black text-xs uppercase flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shadow-[2px_2px_0_0_#fff]"
                     >
                       <Zap className="w-4 h-4 fill-current" />
-                      <span>{isSubmittingManualLead ? 'Disparando...' : '⚡ Salvar & Disparar Teste'}</span>
+                      <span>{isSubmittingManualLead ? 'Disparando...' : 'Salvar & Disparar'}</span>
                     </button>
                   </div>
                 </div>
