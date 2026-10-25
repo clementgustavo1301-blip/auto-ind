@@ -63,11 +63,12 @@ export SSL_CERT_DIR="/data/data/com.termux/files/usr/etc/tls/certs"
 export WEBHOOK_URL="https://auto-ind.vercel.app/api/whatsapp/webhook"
 export APP_URL="https://auto-ind.vercel.app"
 
-ARCH=$(uname -m)
-if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+if [ -f "./whatsapp-service-linux-arm64" ]; then
   BIN="./whatsapp-service-linux-arm64"
-else
+elif [ -f "./whatsapp-service-linux-arm" ]; then
   BIN="./whatsapp-service-linux-arm"
+else
+  BIN="./whatsapp-service-linux-arm64"
 fi
 
 chmod +x "$BIN" 2>/dev/null || true

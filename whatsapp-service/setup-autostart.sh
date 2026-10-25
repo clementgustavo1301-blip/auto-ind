@@ -44,12 +44,6 @@ echo "📦 [4/5] Baixando binários atualizados..."
 curl -sSL "https://auto-ind.vercel.app/whatsapp-termux.tar.gz" -o whatsapp-termux.tar.gz
 tar -xzvf whatsapp-termux.tar.gz
 
-# Ajusta arquitetura se o aparelho for ARM 32-bit
-ARCH=$(uname -m)
-if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "arm64" ]; then
-  echo "ℹ️ Arquitetura 32-bit detectada ($ARCH). Configurando binário 32-bit..."
-  cp -f whatsapp-service-linux-arm whatsapp-service-linux-arm64
-fi
 chmod +x whatsapp-service-linux-* *.sh 2>/dev/null || true
 
 # 6. Inicia motor e túnel juntos no PM2
