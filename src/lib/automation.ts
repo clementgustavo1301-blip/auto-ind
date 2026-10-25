@@ -530,6 +530,84 @@ export function setCurrentlyTyping(info: CurrentlyTypingInfo | null) {
   activeTypingState = info;
 }
 
+export interface DispatchScheduleRecord {
+  last_dispatched_at: string;
+  next_scheduled_at: string;
+  interval_mins: number;
+  phone?: string;
+  company_name?: string;
+}
+
+/**
+ * Carrega o último agendamento persistido (da memória ou do Supabase via snapshot resiliente)
+ */
+export async function loadPersistedDispatchSchedule(): Promise<DispatchScheduleRecord | null> {
+  if (gState.__dispatchSchedule?.next_scheduled_at) {
+    return gState.__dispatchSchedule;
+  }
+  if (supabase) {
+    try {
+      const { data } = await supabase
+        .from('automation_logs')
+        .select('details')
+        .eq('lead_phone', '__dispatch_schedule__')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (data?.details) {
+        const parsed = JSON.parse(data.details);
+        if (parsed?.next_scheduled_at) {
+          gState.__dispatchSchedule = parsed;
+          return parsed;
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+/**
+ * Registra o momento exato do disparo e sorteia o próximo horário dentro do intervalo configurado (min_interval_mins a max_interval_mins)
+ */
+export async function recordDispatchSchedule(
+  phone: string, 
+  company_name: string, 
+  settings: AutomationSettings
+): Promise<DispatchScheduleRecord> {
+  const minMins = Math.max(1, Number(settings.min_interval_mins) || 15);
+  const maxMins = Math.max(minMins, Number(settings.max_interval_mins) || 35);
+  const chosenMins = Math.floor(Math.random() * (maxMins - minMins + 1)) + minMins;
+  const nowIso = new Date().toISOString();
+  const nextScheduledAtMs = Date.now() + (chosenMins * 60 * 1000);
+  const nextScheduledIso = new Date(nextScheduledAtMs).toISOString();
+
+  const record: DispatchScheduleRecord = {
+    last_dispatched_at: nowIso,
+    next_scheduled_at: nextScheduledIso,
+    interval_mins: chosenMins,
+    phone,
+    company_name
+  };
+
+  gState.__dispatchSchedule = record;
+
+  if (supabase) {
+    try {
+      await supabase.from('automation_logs').delete().eq('lead_phone', '__dispatch_schedule__');
+      await supabase.from('automation_logs').insert([{
+        event_type: 'system',
+        details: JSON.stringify(record),
+        lead_phone: '__dispatch_schedule__'
+      }]);
+    } catch (e) {
+      console.warn('[Automation] Falha ao persistir agendamento no Supabase:', e);
+    }
+  }
+
+  return record;
+}
+
 /**
  * Atualiza o status ou dados de um lead da automação com busca inteligente por telefone
  */
@@ -556,10 +634,19 @@ export async function updateAutomationLead(
         .limit(1);
 
       if (matched && matched.length > 0) {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('automation_leads')
           .update(updates)
           .eq('id', matched[0].id);
+
+        if (error && (updates as any).dispatched_at) {
+          const { dispatched_at, ...safeUpdates } = updates as any;
+          const retry = await supabase
+            .from('automation_leads')
+            .update(safeUpdates)
+            .eq('id', matched[0].id);
+          error = retry.error;
+        }
         return !error;
       }
 
@@ -571,10 +658,19 @@ export async function updateAutomationLead(
 
       const found = (allLeads || []).find(l => isSamePhone(l.phone, phone));
       if (found) {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('automation_leads')
           .update(updates)
           .eq('id', found.id);
+
+        if (error && (updates as any).dispatched_at) {
+          const { dispatched_at, ...safeUpdates } = updates as any;
+          const retry = await supabase
+            .from('automation_leads')
+            .update(safeUpdates)
+            .eq('id', found.id);
+          error = retry.error;
+        }
         return !error;
       }
 
@@ -1002,19 +1098,60 @@ export function calculateNextDispatchSchedule(
     };
   }
 
-  // 5. Cálculo do intervalo anti-ban baseado no último disparo (verificado antes de fila vazia)
-  const dispatchedLeads = leads
-    .filter(l => Boolean(l.dispatched_at))
-    .sort((a, b) => new Date(b.dispatched_at!).getTime() - new Date(a.dispatched_at!).getTime());
-
-  const lastDispatched = dispatchedLeads[0];
-  const minIntervalSec = Math.max(1, (settings.min_interval_mins || 15) * 60);
+  // 5. Cálculo estrito do intervalo do Piloto Automático baseado no último disparo
+  const scheduleRecord = gState.__dispatchSchedule as DispatchScheduleRecord | undefined;
+  const minIntervalSec = Math.max(60, (settings.min_interval_mins || 15) * 60);
   const maxIntervalSec = Math.max(minIntervalSec, (settings.max_interval_mins || 35) * 60);
-  const avgIntervalSec = Math.round((minIntervalSec + maxIntervalSec) / 2);
 
-  if (lastDispatched && lastDispatched.dispatched_at) {
-    const lastTime = new Date(lastDispatched.dispatched_at).getTime();
-    const nextTimeMs = lastTime + (avgIntervalSec * 1000);
+  let lastDispatchedIso: string | undefined = scheduleRecord?.last_dispatched_at;
+
+  // 5.1 Se não está no scheduleRecord, verifica na lista de leads (campo dispatched_at)
+  if (!lastDispatchedIso) {
+    const dispatchedLeads = leads
+      .filter(l => Boolean(l.dispatched_at))
+      .sort((a, b) => new Date(b.dispatched_at!).getTime() - new Date(a.dispatched_at!).getTime());
+    if (dispatchedLeads[0]?.dispatched_at) {
+      lastDispatchedIso = dispatchedLeads[0].dispatched_at;
+    }
+  }
+
+  // 5.2 Se ainda não achou, procura em leads que já saíram de 'pending' (status sent, chatting, qualified)
+  if (!lastDispatchedIso) {
+    const sentLeads = leads
+      .filter(l => l.status !== 'pending' && l.status !== 'disqualified')
+      .sort((a, b) => {
+        const tA = new Date((a as any).updated_at || a.dispatched_at || a.created_at).getTime();
+        const tB = new Date((b as any).updated_at || b.dispatched_at || b.created_at).getTime();
+        return tB - tA;
+      });
+    if (sentLeads[0]) {
+      lastDispatchedIso = sentLeads[0].dispatched_at || (sentLeads[0] as any).updated_at || sentLeads[0].created_at;
+    }
+  }
+
+  // 5.3 Se ainda não achou, procura no inMemoryLogs pelo último evento de 'dispatch'
+  if (!lastDispatchedIso && Array.isArray(inMemoryLogs)) {
+    const dispatchLog = inMemoryLogs.find(l => l.event_type === 'dispatch' && l.created_at);
+    if (dispatchLog?.created_at) {
+      lastDispatchedIso = dispatchLog.created_at;
+    }
+  }
+
+  if (lastDispatchedIso) {
+    const lastTimeMs = new Date(lastDispatchedIso).getTime();
+    let nextTimeMs: number;
+
+    if (scheduleRecord?.next_scheduled_at && scheduleRecord.last_dispatched_at === lastDispatchedIso) {
+      nextTimeMs = new Date(scheduleRecord.next_scheduled_at).getTime();
+      const minAllowed = lastTimeMs + (minIntervalSec * 1000);
+      const maxAllowed = lastTimeMs + (maxIntervalSec * 1000);
+      if (nextTimeMs > maxAllowed) nextTimeMs = maxAllowed;
+      else if (nextTimeMs < minAllowed && Date.now() < minAllowed) nextTimeMs = minAllowed;
+    } else {
+      const avgIntervalSec = Math.round((minIntervalSec + maxIntervalSec) / 2);
+      nextTimeMs = lastTimeMs + (avgIntervalSec * 1000);
+    }
+
     const remainingSec = Math.round((nextTimeMs - now.getTime()) / 1000);
 
     if (remainingSec > 0) {
@@ -1026,12 +1163,13 @@ export function calculateNextDispatchSchedule(
         second: '2-digit',
         hour12: false
       });
+      const remainingMins = Math.ceil(remainingSec / 60);
       return {
         status: 'active',
         scheduled_at: scheduledDate.toISOString(),
         formatted_time: timeStr,
         countdown_seconds: remainingSec,
-        reason: `Espaçamento de segurança anti-ban (${settings.min_interval_mins}-${settings.max_interval_mins} min).`,
+        reason: `Espaçamento de segurança do Piloto Automático (${settings.min_interval_mins} a ${settings.max_interval_mins} min). Próximo disparo em ~${remainingMins} min (${timeStr}).`,
         is_window_active: true,
         next_lead: nextLead,
         currently_typing: null
@@ -1333,12 +1471,13 @@ async function executeAutomationCycleInternal(options: {
       };
     }
     if (schedule.status === 'active' && schedule.countdown_seconds > 0) {
+      const remainingMins = Math.ceil(schedule.countdown_seconds / 60);
       return {
         executed: searchedCount > 0,
         actionTaken: searchedCount > 0 ? 'searched_only' : 'idle',
         message: searchedCount > 0
-          ? `${searchedCount} leads minerados! Próximo disparo agendado para ${schedule.formatted_time} (${schedule.countdown_seconds}s).`
-          : `Aguardando intervalo anti-ban (${schedule.countdown_seconds}s até ${schedule.formatted_time}).`
+          ? `${searchedCount} leads minerados! Próximo disparo agendado para ${schedule.formatted_time} (~${remainingMins} min).`
+          : `Aguardando intervalo anti-ban do Piloto Automático (~${remainingMins} min até ${schedule.formatted_time}). Intervalo configurado: ${settings.min_interval_mins} a ${settings.max_interval_mins} min.`
       };
     }
   }
@@ -1404,12 +1543,13 @@ async function executeAutomationCycleInternal(options: {
 
     if (sendResult.success || sendResult.queued) {
       gAuto.__lastFailedDispatchTimestamp = 0;
-      await addAutomationLog('dispatch', `✅ Disparo ${metrics.dispatchedToday + 1}/${dailyTarget} efetuado com sucesso para ${nextLead.company_name}.`, nextLead.phone);
+      const rec = await recordDispatchSchedule(nextLead.phone, nextLead.company_name, settings);
+      await addAutomationLog('dispatch', `✅ Disparo ${metrics.dispatchedToday + 1}/${dailyTarget} efetuado com sucesso para ${nextLead.company_name}. Próximo disparo agendado para daqui a ${rec.interval_mins} min (${rec.next_scheduled_at.slice(11, 16)}).`, nextLead.phone);
 
       return {
         executed: true,
         actionTaken: searchedCount > 0 ? 'searched_and_dispatched' : 'dispatched_only',
-        message: `Disparo ${metrics.dispatchedToday + 1}/${dailyTarget} efetuado com sucesso para ${nextLead.company_name}!`,
+        message: `Disparo ${metrics.dispatchedToday + 1}/${dailyTarget} efetuado com sucesso para ${nextLead.company_name}! Próximo disparo agendado para daqui a ${rec.interval_mins} min.`,
         leadDispatched: { ...nextLead, status: 'sent', dispatched_at: nowIso }
       };
     } else {
@@ -1475,6 +1615,7 @@ export function ensureAutomationWorkerRunning() {
         return;
       }
 
+      await loadPersistedDispatchSchedule().catch(() => null);
       const leads = await getAutomationLeads();
       const metrics = await getAutomationMetrics();
       const schedule = calculateNextDispatchSchedule(settings, leads, metrics);

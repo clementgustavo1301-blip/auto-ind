@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { runAutomationCycle, ensureAutomationWorkerRunning } from '@/lib/automation';
+import { runAutomationCycle, ensureAutomationWorkerRunning, loadPersistedDispatchSchedule } from '@/lib/automation';
 import { setDetectedAppOrigin } from '@/lib/whatsapp';
 
 export const maxDuration = 60;
@@ -11,6 +11,7 @@ export async function POST(request: Request) {
       setDetectedAppOrigin(new URL(request.url).origin);
     } catch {}
     ensureAutomationWorkerRunning();
+    await loadPersistedDispatchSchedule().catch(() => null);
 
     let force = false;
     let skipSearch = false;
@@ -43,6 +44,7 @@ export async function GET(request: Request) {
       setDetectedAppOrigin(new URL(request.url).origin);
     } catch {}
     ensureAutomationWorkerRunning();
+    await loadPersistedDispatchSchedule().catch(() => null);
 
     // Permite execução via Vercel Cron, Heartbeat Go ou Healthcheck
     const result = await runAutomationCycle({ force: false, skipSearch: false });

@@ -143,11 +143,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
   
   // Modais e gavetas
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [showAntiBanPanel, setShowAntiBanPanel] = useState(false);
-  const [isSavingAntiBan, setIsSavingAntiBan] = useState(false);
-  const [antiBanSuccessMsg, setAntiBanSuccessMsg] = useState('');
-  const [simulatedCountdown, setSimulatedCountdown] = useState<number | null>(null);
-  const [showSimulatedTyping, setShowSimulatedTyping] = useState(false);
   const [isSoundMuted, setIsSoundMuted] = useState(soundEngine.getMuted());
 
   // Programação do Próximo Disparo e Digitação em Tempo Real
@@ -183,20 +178,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
   const [manualMessageText, setManualMessageText] = useState('');
   const [isSendingManual, setIsSendingManual] = useState(false);
 
-  // Configurações Anti-Ban sincronizadas com o microserviço Go
-  const [antiBanConfig, setAntiBanConfig] = useState({
-    daily_limit: 10,
-    min_delay_sec: 30,
-    max_delay_sec: 70,
-    typing_speed_ms: 150,
-    min_typing_sec: 3,
-    max_typing_sec: 15,
-    sent_today: 0,
-  });
-  const [antiBanDrafts, setAntiBanDrafts] = useState<Record<string, string>>({});
   const [settingsDrafts, setSettingsDrafts] = useState<Record<string, string>>({});
-  const showAntiBanPanelRef = useRef(false);
-  const isAntiBanDirtyRef = useRef(false);
   const [waServiceStatus, setWaServiceStatus] = useState<{
     connected?: boolean;
     logged_in?: boolean;
@@ -227,10 +209,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
       }
     } catch {}
   }, []);
-
-  useEffect(() => {
-    showAntiBanPanelRef.current = showAntiBanPanel;
-  }, [showAntiBanPanel]);
 
   // Filtro de status do Kanban
   const [activeKanbanTab, setActiveKanbanTab] = useState<AutomationLeadStatus | 'all'>('all');
@@ -288,39 +266,16 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   }, [isSettingsOpen]);
 
-  // Carrega regras anti-ban diretamente do microserviço Go (sem sobrescrever edição aberta do usuário)
-  const fetchAntiBanConfig = useCallback(async (forceOverwrite = false) => {
-    try {
-      const res = await fetch('/api/whatsapp/config', { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        setAntiBanConfig(prev => {
-          if (!forceOverwrite && (showAntiBanPanelRef.current || isAntiBanDirtyRef.current)) {
-            return {
-              ...prev,
-              sent_today: typeof data.sent_today === 'number' ? data.sent_today : prev.sent_today,
-            };
-          }
-          return { ...prev, ...data };
-        });
-      }
-    } catch (e) {
-      console.error('Falha ao carregar configurações anti-ban:', e);
-    }
-  }, []);
-
   // Polling automático
   useEffect(() => {
     fetchStatus();
-    fetchAntiBanConfig(true);
     fetchQRCode();
     const interval = setInterval(() => {
       fetchStatus();
-      fetchAntiBanConfig(false);
       fetchQRCode();
     }, 4000);
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchAntiBanConfig, fetchQRCode]);
+  }, [fetchStatus, fetchQRCode]);
 
   // Foca automaticamente no lead qualificado quando o usuário clica na notificação / pop-up
   const lastFocusedPhoneRef = useRef<string | null>(null);
@@ -672,212 +627,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   };
 
-  // Persiste regras anti-ban no microserviço Go e sincroniza daily_limit com a automação
-  const persistAntiBanToBackend = async (cfgToSave: typeof antiBanConfig, customMessage?: string) => {
-    setIsSavingAntiBan(true);
-    try {
-      const res = await fetch('/api/whatsapp/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cfgToSave),
-      });
-
-      await fetch('/api/automation/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ daily_limit: cfgToSave.daily_limit })
-      }).catch(() => {});
-
-      if (res.ok) {
-        isAntiBanDirtyRef.current = false;
-        setAntiBanSuccessMsg(customMessage || 'Regras de Anti-Ban e Digitação salvas e ativas!');
-        fetchStatus();
-        setTimeout(() => setAntiBanSuccessMsg(''), 4000);
-      } else {
-        setAntiBanSuccessMsg('⚠️ Salvo localmente na automação (verifique a conexão do microserviço).');
-        setTimeout(() => setAntiBanSuccessMsg(''), 4000);
-      }
-    } catch (err: any) {
-      console.error('Falha ao salvar anti-ban:', err);
-    } finally {
-      setIsSavingAntiBan(false);
-    }
-  };
-
-  // Helpers para edição livre de campos numéricos (permite apagar todos os dígitos sem travar no '1')
-  const getAntiBanInputValue = (field: keyof typeof antiBanConfig) => {
-    if (antiBanDrafts[field] !== undefined) return antiBanDrafts[field];
-    return String(antiBanConfig[field]);
-  };
-
-  const handleAntiBanNumberChange = (field: keyof typeof antiBanConfig, rawValue: string) => {
-    isAntiBanDirtyRef.current = true;
-    setAntiBanDrafts(prev => ({ ...prev, [field]: rawValue }));
-    if (rawValue.trim() === '') return;
-    const parsed = Number(rawValue);
-    if (!Number.isNaN(parsed) && parsed > 0) {
-      setAntiBanConfig(prev => ({ ...prev, [field]: parsed }));
-    }
-  };
-
-  const handleAntiBanNumberBlur = (field: keyof typeof antiBanConfig, minVal: number, maxVal: number) => {
-    const raw = antiBanDrafts[field];
-    setAntiBanDrafts(prev => {
-      const next = { ...prev };
-      delete next[field];
-      return next;
-    });
-
-    setAntiBanConfig(prev => {
-      const parsed = raw !== undefined && raw.trim() !== '' ? Number(raw) : prev[field];
-      const safeNum = Number.isNaN(parsed) ? minVal : Math.min(maxVal, Math.max(minVal, Math.round(parsed)));
-      const updated = { ...prev, [field]: safeNum };
-
-      if (field === 'min_delay_sec' && updated.max_delay_sec < safeNum) {
-        updated.max_delay_sec = safeNum;
-      }
-      if (field === 'max_delay_sec' && safeNum < updated.min_delay_sec) {
-        updated.max_delay_sec = updated.min_delay_sec;
-      }
-      if (field === 'min_typing_sec' && updated.max_typing_sec < safeNum) {
-        updated.max_typing_sec = safeNum;
-      }
-      if (field === 'max_typing_sec' && safeNum < updated.min_typing_sec) {
-        updated.max_typing_sec = updated.min_typing_sec;
-      }
-      return updated;
-    });
-  };
-
-  // Salvar regras anti-ban e digitação no microserviço Go
-  const handleSaveAntiBanConfig = async () => {
-    soundEngine.playMechanicalClick('primary');
-    setAntiBanDrafts({});
-    const normalized = {
-      ...antiBanConfig,
-      daily_limit: Math.max(1, Number(antiBanConfig.daily_limit) || 10),
-      min_delay_sec: Math.max(1, Number(antiBanConfig.min_delay_sec) || 30),
-      max_delay_sec: Math.max(Number(antiBanConfig.min_delay_sec) || 30, Number(antiBanConfig.max_delay_sec) || 70),
-      typing_speed_ms: Math.max(20, Number(antiBanConfig.typing_speed_ms) || 150),
-      min_typing_sec: Math.max(1, Number(antiBanConfig.min_typing_sec) || 3),
-      max_typing_sec: Math.max(Number(antiBanConfig.min_typing_sec) || 3, Number(antiBanConfig.max_typing_sec) || 15),
-    };
-    setAntiBanConfig(normalized);
-    await persistAntiBanToBackend(normalized, '✅ Regras de Anti-Ban e Digitação salvas e ativas no microserviço!');
-    soundEngine.playSentNotification();
-  };
-
-  // Resetar contador diário de disparos
-  const handleResetCounter = async () => {
-    if (!confirm('Deseja zerar o contador de mensagens enviadas hoje para 0?')) return;
-    soundEngine.playMechanicalClick('secondary');
-    try {
-      const res = await fetch('/api/whatsapp/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sent_today: 0 }),
-      });
-      if (res.ok) {
-        setAntiBanConfig(prev => ({ ...prev, sent_today: 0 }));
-        setAntiBanSuccessMsg('Contador diário de disparos zerado!');
-        fetchStatus();
-        setTimeout(() => setAntiBanSuccessMsg(''), 3000);
-      }
-    } catch (err: any) {
-      alert('Erro ao resetar contador: ' + err.message);
-    }
-  };
-
-  // Presets de Anti-Ban (aplicam e salvam imediatamente para nunca voltar sozinho)
-  const applyPreset = async (preset: 'safe' | 'medium' | 'fast' | 'test') => {
-    soundEngine.playMechanicalClick('secondary');
-    isAntiBanDirtyRef.current = true;
-    setAntiBanDrafts({});
-
-    let nextCfg = { ...antiBanConfig };
-    let presetLabel = '';
-    if (preset === 'safe') {
-      presetLabel = '🛡️ Preset Ultra Seguro aplicado e salvo!';
-      nextCfg = {
-        ...antiBanConfig,
-        daily_limit: 15,
-        min_delay_sec: 40,
-        max_delay_sec: 80,
-        typing_speed_ms: 180,
-        min_typing_sec: 4,
-        max_typing_sec: 20,
-      };
-    } else if (preset === 'medium') {
-      presetLabel = '⚖️ Preset Equilibrado aplicado e salvo!';
-      nextCfg = {
-        ...antiBanConfig,
-        daily_limit: 30,
-        min_delay_sec: 25,
-        max_delay_sec: 50,
-        typing_speed_ms: 140,
-        min_typing_sec: 3,
-        max_typing_sec: 15,
-      };
-    } else if (preset === 'fast') {
-      presetLabel = '⚡ Preset Acelerado aplicado e salvo!';
-      nextCfg = {
-        ...antiBanConfig,
-        daily_limit: 60,
-        min_delay_sec: 15,
-        max_delay_sec: 30,
-        typing_speed_ms: 90,
-        min_typing_sec: 2,
-        max_typing_sec: 8,
-      };
-    } else if (preset === 'test') {
-      presetLabel = '🧪 Preset Teste Rápido aplicado e salvo!';
-      nextCfg = {
-        ...antiBanConfig,
-        daily_limit: 100,
-        min_delay_sec: 4,
-        max_delay_sec: 8,
-        typing_speed_ms: 50,
-        min_typing_sec: 2,
-        max_typing_sec: 5,
-      };
-    }
-
-    setAntiBanConfig(nextCfg);
-    await persistAntiBanToBackend(nextCfg, presetLabel);
-  };
-
-  // Estimativa de tempo de digitação da mensagem inicial da automação
-  const estimatedTypingSec = useMemo(() => {
-    const chars = (settings?.initial_message_template || 'Olá, tudo bem?').length;
-    const ms = chars * antiBanConfig.typing_speed_ms;
-    const clampedSec = Math.min(
-      Math.max(ms / 1000, antiBanConfig.min_typing_sec),
-      antiBanConfig.max_typing_sec
-    );
-    return clampedSec.toFixed(1);
-  }, [settings?.initial_message_template, antiBanConfig]);
-
-  // Testar digitação humanizada ao vivo com cronômetro
-  const runLiveTypingSimulation = () => {
-    soundEngine.playMechanicalClick('secondary');
-    const totalSec = parseFloat(estimatedTypingSec);
-    setShowSimulatedTyping(true);
-    setSimulatedCountdown(totalSec);
-
-    const startTime = Date.now();
-    const timer = setInterval(() => {
-      const elapsed = (Date.now() - startTime) / 1000;
-      const remaining = Math.max(0, totalSec - elapsed);
-      setSimulatedCountdown(parseFloat(remaining.toFixed(1)));
-      if (remaining <= 0) {
-        clearInterval(timer);
-        setShowSimulatedTyping(false);
-        setSimulatedCountdown(null);
-        soundEngine.playSentNotification();
-      }
-    }, 100);
-  };
-
   // Salvar configurações gerais
   const handleSaveSettings = async () => {
     if (!editSettings) return;
@@ -910,7 +659,11 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         setEditSettings(data);
         setNewSegmentInput('');
         setNewCityInput('');
-        setAntiBanConfig(prev => ({ ...prev, daily_limit: data.daily_limit }));
+        fetch('/api/whatsapp/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ daily_limit: data.daily_limit })
+        }).catch(() => {});
         setIsSettingsOpen(false);
         setCycleFeedback(`✅ Configurações salvas e ativas! Meta: ${data.daily_limit}/dia • Horário: ${data.start_hour} às ${data.end_hour} • Intervalo: ${data.min_interval_mins}-${data.max_interval_mins} min.`);
         await fetchStatus();
@@ -1049,7 +802,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
   const disqualifiedCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'disqualified')).length, [leads, matchesKanbanStage]);
   const totalRepliedCount = chattingCount + qualifiedCount;
   const leadsDispatchedToday = metrics?.dispatchedToday ?? 0;
-  const dailyQuota = settings?.daily_limit || antiBanConfig.daily_limit || 15;
+  const dailyQuota = settings?.daily_limit || 10;
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -1119,24 +872,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         </div>
 
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-2.5 sm:flex-wrap w-full lg:w-auto">
-          {/* Botão Regras Anti-Ban */}
-          <button
-            type="button"
-            onClick={() => {
-              soundEngine.playMechanicalClick('secondary');
-              setShowAntiBanPanel(prev => !prev);
-            }}
-            className={`btn-tactile-4 px-3 sm:px-4 py-2.5 border-2 font-mono text-[11px] sm:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
-              showAntiBanPanel
-                ? 'bg-[#E5FF00] text-zinc-950 border-zinc-950 shadow-[2px_2px_0_0_#fff]'
-                : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 hover:text-white'
-            }`}
-            title="Ajustar intervalos, digitação e limites anti-ban"
-          >
-            <Sliders className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-            <span className="truncate">{showAntiBanPanel ? 'Ocultar Anti-Ban' : 'Regras Anti-Ban'}</span>
-          </button>
-
           <button
             onClick={handleRunCycleNow}
             disabled={isCycling}
@@ -1199,7 +934,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
               onClick={() => {
                 soundEngine.playMechanicalClick('secondary');
                 fetchStatus();
-                fetchAntiBanConfig(true);
                 fetchQRCode();
               }}
               className="flex-1 sm:flex-initial p-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-2 border-zinc-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer font-mono text-[11px] font-bold uppercase"
@@ -1362,391 +1096,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
         </div>
       </div>
 
-      {/* 2. PAINEL COMPLETO DE CONFIGURAÇÕES ANTI-BAN E DIGITAÇÃO (EDIÇÃO LIVRE E AUTO-SAVE DE PRESETS) */}
-      <AnimatePresence>
-        {showAntiBanPanel && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="bg-white border-4 border-zinc-950 p-4 sm:p-6 md:p-8 shadow-[6px_6px_0_0_#18181B] sm:shadow-[10px_10px_0_0_#18181B] flex flex-col gap-5 sm:gap-6 overflow-hidden"
-          >
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b-4 border-zinc-950 pb-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 bg-[#E5FF00] border-2 border-zinc-950 shrink-0" />
-                  <span className="font-mono text-[10px] sm:text-xs uppercase tracking-widest font-black text-zinc-600">
-                    Painel de Controle Total Anti-Ban & Humanização // Automação
-                  </span>
-                </div>
-                <h3 className="text-xl sm:text-2xl md:text-3xl font-black uppercase text-zinc-950 mt-1">
-                  Configurações de Espaçamento & Digitação
-                </h3>
-              </div>
-
-              {/* Presets Rápidos (Aplicam e Salvam Imediatamente) */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-mono font-bold uppercase text-zinc-500 w-full sm:w-auto">Presets (Auto-Save):</span>
-                <button
-                  type="button"
-                  onClick={() => applyPreset('safe')}
-                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
-                    antiBanConfig.daily_limit === 15 && antiBanConfig.min_delay_sec === 40
-                      ? 'bg-[#25D366] text-zinc-950 shadow-[2px_2px_0_0_#000] font-black'
-                      : 'bg-zinc-100 hover:bg-[#25D366] hover:text-zinc-950'
-                  }`}
-                  title="15 leads/dia, 40-80s delay, 180ms/char"
-                >
-                  🛡️ Ultra Seguro
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyPreset('medium')}
-                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
-                    antiBanConfig.daily_limit === 30 && antiBanConfig.min_delay_sec === 25
-                      ? 'bg-[#E5FF00] text-zinc-950 shadow-[2px_2px_0_0_#000] font-black'
-                      : 'bg-zinc-100 hover:bg-[#E5FF00]'
-                  }`}
-                  title="30 leads/dia, 25-50s delay, 140ms/char"
-                >
-                  ⚖️ Equilibrado
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyPreset('fast')}
-                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
-                    antiBanConfig.daily_limit === 60 && antiBanConfig.min_delay_sec === 15
-                      ? 'bg-zinc-950 text-[#E5FF00] shadow-[2px_2px_0_0_#25D366] font-black'
-                      : 'bg-zinc-100 hover:bg-zinc-950 hover:text-white'
-                  }`}
-                  title="60 leads/dia, 15-30s delay, 90ms/char"
-                >
-                  ⚡ Acelerado
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyPreset('test')}
-                  className={`px-3 py-1.5 border-2 border-zinc-950 font-mono text-xs font-black uppercase transition-all cursor-pointer ${
-                    antiBanConfig.daily_limit === 100 && antiBanConfig.min_delay_sec === 4
-                      ? 'bg-amber-400 text-zinc-950 shadow-[2px_2px_0_0_#000]'
-                      : 'bg-amber-200 hover:bg-amber-300 text-amber-950'
-                  }`}
-                  title="100 leads/dia, 4-8s delay, 50ms/char (para testes rápidos)"
-                >
-                  🧪 Teste Rápido
-                </button>
-              </div>
-            </div>
-
-            {/* Feedback de Sucesso */}
-            {antiBanSuccessMsg && (
-              <div className="p-3 bg-emerald-100 border-2 border-emerald-600 text-emerald-900 font-mono text-xs font-bold flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                <span>{antiBanSuccessMsg}</span>
-              </div>
-            )}
-
-            {/* Grid dos 3 Blocos de Configuração */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-              
-              {/* Bloco 1: Espaçamento de Segurança */}
-              <div className="bg-zinc-50 border-2 border-zinc-950 p-4 flex flex-col gap-4">
-                <div className="border-b-2 border-zinc-200 pb-2">
-                  <span className="font-mono text-xs font-black uppercase text-zinc-900 flex items-center gap-1.5">
-                    <Clock className="w-4 h-4 text-zinc-950" /> 1. Espaçamento Anti-Ban
-                  </span>
-                  <p className="text-[11px] font-mono text-zinc-500 mt-1">
-                    Intervalo aleatório entre cada envio da fila.
-                  </p>
-                </div>
-
-                <div className="flex flex-col gap-3">
-                  {/* Delay Mínimo */}
-                  <div className="flex flex-col gap-1">
-                    <div className="flex justify-between items-center text-xs font-mono font-bold text-zinc-800">
-                      <span>Delay Mínimo:</span>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min={1}
-                          max={180}
-                          value={getAntiBanInputValue('min_delay_sec')}
-                          onChange={(e) => handleAntiBanNumberChange('min_delay_sec', e.target.value)}
-                          onBlur={() => handleAntiBanNumberBlur('min_delay_sec', 1, 180)}
-                          className="w-16 p-1 border-2 border-zinc-950 text-right font-mono font-black text-xs bg-white focus:bg-[#E5FF00]/20 outline-none"
-                        />
-                        <span className="text-zinc-600">s</span>
-                      </div>
-                    </div>
-                    <input
-                      type="range"
-                      min={1}
-                      max={120}
-                      value={antiBanConfig.min_delay_sec}
-                      onChange={(e) => {
-                        isAntiBanDirtyRef.current = true;
-                        const val = Number(e.target.value);
-                        setAntiBanDrafts(prev => { const n = { ...prev }; delete n.min_delay_sec; return n; });
-                        setAntiBanConfig(prev => ({
-                          ...prev,
-                          min_delay_sec: val,
-                          max_delay_sec: Math.max(val, prev.max_delay_sec)
-                        }));
-                      }}
-                      className="w-full accent-zinc-950 cursor-pointer"
-                    />
-                  </div>
-
-                  {/* Delay Máximo */}
-                  <div className="flex flex-col gap-1">
-                    <div className="flex justify-between items-center text-xs font-mono font-bold text-zinc-800">
-                      <span>Delay Máximo:</span>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min={1}
-                          max={300}
-                          value={getAntiBanInputValue('max_delay_sec')}
-                          onChange={(e) => handleAntiBanNumberChange('max_delay_sec', e.target.value)}
-                          onBlur={() => handleAntiBanNumberBlur('max_delay_sec', antiBanConfig.min_delay_sec, 300)}
-                          className="w-16 p-1 border-2 border-zinc-950 text-right font-mono font-black text-xs bg-white focus:bg-[#E5FF00]/20 outline-none"
-                        />
-                        <span className="text-zinc-600">s</span>
-                      </div>
-                    </div>
-                    <input
-                      type="range"
-                      min={antiBanConfig.min_delay_sec}
-                      max={240}
-                      value={antiBanConfig.max_delay_sec}
-                      onChange={(e) => {
-                        isAntiBanDirtyRef.current = true;
-                        setAntiBanDrafts(prev => { const n = { ...prev }; delete n.max_delay_sec; return n; });
-                        setAntiBanConfig(prev => ({
-                          ...prev,
-                          max_delay_sec: Number(e.target.value)
-                        }));
-                      }}
-                      className="w-full accent-zinc-950 cursor-pointer"
-                    />
-                  </div>
-
-                  <div className="p-2.5 bg-zinc-100 border border-zinc-300 text-[11px] font-mono text-zinc-700 flex flex-col gap-1">
-                    <div>
-                      Média de espera: <b>{Math.round((antiBanConfig.min_delay_sec + antiBanConfig.max_delay_sec) / 2)}s</b> por envio.
-                    </div>
-                    <div className="text-zinc-500 text-[10px]">
-                      Variação dinâmica anti-padrão orgânica ativada.
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Bloco 2: Digitação Humanizada */}
-              <div className="bg-zinc-50 border-2 border-zinc-950 p-4 flex flex-col gap-4">
-                <div className="border-b-2 border-zinc-200 pb-2">
-                  <span className="font-mono text-xs font-black uppercase text-zinc-900 flex items-center gap-1.5">
-                    ✍️ 2. Digitação Humanizada
-                  </span>
-                  <p className="text-[11px] font-mono text-zinc-500 mt-1">
-                    Tempo que o contato vê "Digitando..." no WhatsApp.
-                  </p>
-                </div>
-
-                <div className="flex flex-col gap-3">
-                  {/* Velocidade por caractere */}
-                  <div className="flex flex-col gap-1">
-                    <div className="flex justify-between items-center text-xs font-mono font-bold text-zinc-800">
-                      <span>Velocidade por Caractere:</span>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min={20}
-                          max={500}
-                          step={10}
-                          value={getAntiBanInputValue('typing_speed_ms')}
-                          onChange={(e) => handleAntiBanNumberChange('typing_speed_ms', e.target.value)}
-                          onBlur={() => handleAntiBanNumberBlur('typing_speed_ms', 20, 500)}
-                          className="w-16 p-1 border-2 border-zinc-950 text-right font-mono font-black text-xs bg-white focus:bg-[#E5FF00]/20 outline-none"
-                        />
-                        <span className="text-zinc-600">ms</span>
-                      </div>
-                    </div>
-                    <input
-                      type="range"
-                      min={40}
-                      max={300}
-                      step={10}
-                      value={antiBanConfig.typing_speed_ms}
-                      onChange={(e) => {
-                        isAntiBanDirtyRef.current = true;
-                        setAntiBanDrafts(prev => { const n = { ...prev }; delete n.typing_speed_ms; return n; });
-                        setAntiBanConfig(prev => ({
-                          ...prev,
-                          typing_speed_ms: Number(e.target.value)
-                        }));
-                      }}
-                      className="w-full accent-zinc-950 cursor-pointer"
-                    />
-                  </div>
-
-                  {/* Min e Max segundos (Edição 100% livre para digitar qualquer valor como 15 sem travar no 1) */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[10px] font-mono font-bold text-zinc-700">Duração Mín (s):</span>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={1}
-                        max={60}
-                        value={getAntiBanInputValue('min_typing_sec')}
-                        onChange={(e) => handleAntiBanNumberChange('min_typing_sec', e.target.value)}
-                        onBlur={() => handleAntiBanNumberBlur('min_typing_sec', 1, 60)}
-                        className="p-1.5 border-2 border-zinc-950 font-mono text-xs bg-white font-bold focus:bg-[#E5FF00]/20 outline-none"
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[10px] font-mono font-bold text-zinc-700">Duração Máx (s):</span>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={1}
-                        max={120}
-                        value={getAntiBanInputValue('max_typing_sec')}
-                        onChange={(e) => handleAntiBanNumberChange('max_typing_sec', e.target.value)}
-                        onBlur={() => handleAntiBanNumberBlur('max_typing_sec', antiBanConfig.min_typing_sec, 120)}
-                        className="p-1.5 border-2 border-zinc-950 font-mono text-xs bg-white font-bold focus:bg-[#E5FF00]/20 outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="p-2.5 bg-zinc-100 border border-zinc-300 text-[11px] font-mono text-zinc-700 flex flex-col gap-2">
-                    <div>
-                      Nesta mensagem: simulará <b>{estimatedTypingSec}s</b> digitando.
-                    </div>
-                    <button
-                      type="button"
-                      onClick={runLiveTypingSimulation}
-                      className={`w-full py-1.5 font-mono font-black text-xs uppercase border border-zinc-950 transition-colors cursor-pointer ${
-                        showSimulatedTyping
-                          ? 'bg-[#E5FF00] text-zinc-950 animate-pulse'
-                          : 'bg-zinc-950 text-[#E5FF00] hover:bg-zinc-800'
-                      }`}
-                    >
-                      {simulatedCountdown !== null ? `⏳ ${simulatedCountdown}s digitando...` : `▶️ Testar Digitação (${estimatedTypingSec}s)`}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Bloco 3: Limites Diários & Reset */}
-              <div className="bg-zinc-50 border-2 border-zinc-950 p-4 flex flex-col gap-4">
-                <div className="border-b-2 border-zinc-200 pb-2">
-                  <span className="font-mono text-xs font-black uppercase text-zinc-900 flex items-center gap-1.5">
-                    🛑 3. Limite Diário (1 Lead = 1 Disparo)
-                  </span>
-                  <p className="text-[11px] font-mono text-zinc-500 mt-1">
-                    Contabiliza 1 disparo por empresa/lead prospectado.
-                  </p>
-                </div>
-
-                <div className="flex flex-col gap-3">
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-xs font-mono font-bold text-zinc-800">Limite Diário (leads/dia):</span>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={1}
-                        max={500}
-                        value={getAntiBanInputValue('daily_limit')}
-                        onChange={(e) => handleAntiBanNumberChange('daily_limit', e.target.value)}
-                        onBlur={() => handleAntiBanNumberBlur('daily_limit', 1, 500)}
-                        className="w-24 p-2 border-2 border-zinc-950 font-mono text-sm bg-white font-bold focus:bg-[#E5FF00]/20 outline-none"
-                      />
-                      <div className="flex gap-1">
-                        {[10, 15, 30, 50].map(val => (
-                          <button
-                            key={val}
-                            type="button"
-                            onClick={async () => {
-                              soundEngine.playMechanicalClick('secondary');
-                              setAntiBanDrafts(prev => { const n = { ...prev }; delete n.daily_limit; return n; });
-                              const nextCfg = { ...antiBanConfig, daily_limit: val };
-                              setAntiBanConfig(nextCfg);
-                              await persistAntiBanToBackend(nextCfg, `✅ Limite diário atualizado para ${val} leads/dia!`);
-                            }}
-                            className={`px-2.5 py-1.5 text-[10px] font-mono font-bold border border-zinc-950 transition-colors cursor-pointer ${
-                              antiBanConfig.daily_limit === val ? 'bg-[#E5FF00] text-zinc-950 font-black' : 'bg-white hover:bg-zinc-100'
-                            }`}
-                          >
-                            {val}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-white border border-zinc-300 flex items-center justify-between gap-2">
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-mono text-zinc-500 uppercase font-bold">Leads Disparados Hoje:</span>
-                      <span className="font-mono text-base font-black text-zinc-950">
-                        {leadsDispatchedToday} / {antiBanConfig.daily_limit}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleResetCounter}
-                      className="px-2.5 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-700 font-mono text-[10px] font-black uppercase cursor-pointer"
-                      title="Resetar contador de hoje para 0"
-                    >
-                      Zerar Hoje
-                    </button>
-                  </div>
-
-                  <div className="p-2 bg-zinc-100 border border-zinc-300 text-[10px] font-mono text-zinc-600">
-                    1 Lead = 1 Disparo (mesmo enviando 2 balões humanizados). Respostas da IA SDR não consomem a cota diária.
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Rodapé do Painel Anti-Ban */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t-2 border-zinc-200 pt-4 gap-3">
-              <span className="text-xs font-mono text-zinc-500">
-                * As regras são aplicadas ao worker Go e sincronizadas com a meta diária do robô.
-              </span>
-
-              <div className="flex items-center gap-2.5 w-full sm:w-auto">
-                <button
-                  type="button"
-                  onClick={() => {
-                    isAntiBanDirtyRef.current = false;
-                    setAntiBanDrafts({});
-                    setShowAntiBanPanel(false);
-                  }}
-                  className="flex-1 sm:flex-initial px-4 py-2.5 border-2 border-zinc-950 bg-zinc-100 hover:bg-zinc-200 font-mono text-xs font-bold uppercase cursor-pointer"
-                >
-                  Fechar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveAntiBanConfig}
-                  disabled={isSavingAntiBan}
-                  className="flex-1 sm:flex-initial px-5 py-2.5 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono font-black text-xs uppercase border-2 border-zinc-950 shadow-[3px_3px_0_0_#000] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <Check className="w-4 h-4 stroke-[3]" />
-                  <span>{isSavingAntiBan ? 'Salvando...' : 'Salvar Regras'}</span>
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* 3. CARDS DE MÉTRICAS DO DIA & FUNIL INTERATIVO (1 LEAD = 1 DISPARO) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
@@ -2570,7 +1919,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                           const parsed = parseInt(raw, 10);
                           if (!Number.isNaN(parsed) && parsed > 0) {
                             setEditSettings({ ...editSettings, daily_limit: parsed });
-                            setAntiBanConfig(prev => ({ ...prev, daily_limit: parsed }));
                           }
                         }
                       }}
@@ -2580,7 +1928,6 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                         const parsed = raw !== undefined && raw.trim() !== '' ? parseInt(raw, 10) : editSettings.daily_limit;
                         const safeVal = Number.isNaN(parsed) || parsed < 1 ? 10 : Math.min(500, parsed);
                         setEditSettings({ ...editSettings, daily_limit: safeVal });
-                        setAntiBanConfig(prev => ({ ...prev, daily_limit: safeVal }));
                       }}
                       className="w-full bg-zinc-900 border border-zinc-800 p-2 text-zinc-100 font-mono font-bold focus:border-[#E5FF00] outline-none"
                     />

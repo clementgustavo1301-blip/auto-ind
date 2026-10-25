@@ -5,6 +5,7 @@ import {
   getAutomationLeads, 
   getAutomationLogs,
   calculateNextDispatchSchedule,
+  loadPersistedDispatchSchedule,
   getCurrentlyTyping,
   setCurrentlyTyping,
   ensureAutomationWorkerRunning,
@@ -33,7 +34,8 @@ export async function GET(request: Request) {
       getAutomationLogs(40),
       getWhatsAppQueue().catch(() => []),
       getWhatsAppStatus().catch(() => null),
-      getRecentQualifiedAlerts().catch(() => [])
+      getRecentQualifiedAlerts().catch(() => []),
+      loadPersistedDispatchSchedule().catch(() => null)
     ]);
 
     // Garante estritamente 1 Lead = 1 Disparo: se o microserviço Go contou múltiplos balões do mesmo lead, sincroniza com dispatchedToday
