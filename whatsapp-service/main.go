@@ -458,33 +458,8 @@ func (s *ServiceManager) resolveSenderPhone(evt *events.Message) string {
 		}
 	}
 
-	// 7. Fallback inteligente: se a resposta veio de um @lid não mapeado, verifica se há apenas 1 contato
-	// recente na fila de disparos (nas últimas 4 horas) para vincular automaticamente
-	s.queueMu.RLock()
-	recentPhones := make(map[string]string)
-	var latestPhone string
-	var latestTime time.Time
-	for _, it := range s.queue {
-		if it.Status == "sent" && it.SentAt != nil && time.Since(*it.SentAt) < 4*time.Hour {
-			k := phoneKey(it.Phone)
-			if k != "" {
-				recentPhones[k] = digitsOnly(it.Phone)
-				if it.SentAt.After(latestTime) {
-					latestTime = *it.SentAt
-					latestPhone = digitsOnly(it.Phone)
-				}
-			}
-		}
-	}
-	s.queueMu.RUnlock()
-
-	if len(recentPhones) == 1 && latestPhone != "" {
-		log.Printf("🔗 [LID Resolver] Vinculando @lid %s ao único contato disparado recentemente: %s", evt.Info.Sender, latestPhone)
-		s.rememberPhoneForJID(evt.Info.Sender, latestPhone)
-		s.rememberPhoneForJID(evt.Info.Chat, latestPhone)
-		return latestPhone
-	}
-
+	// Se não for possível mapear de forma segura e autêntica o número de telefone,
+	// retorna o identificador bruto do remetente sem nunca forjar ou adivinhar contatos da fila.
 	return evt.Info.Sender.User
 }
 

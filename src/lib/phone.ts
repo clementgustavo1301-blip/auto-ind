@@ -42,8 +42,17 @@ export function normalizeBrazilianPhone(raw: string): string {
  */
 export function isSamePhone(a?: string | null, b?: string | null): boolean {
   if (!a || !b) return false;
-  const da = cleanPhoneDigits(a);
-  const db = cleanPhoneDigits(b);
+  const trimmedA = a.trim();
+  const trimmedB = b.trim();
+  if (trimmedA === trimmedB) return true;
+
+  // LIDs do WhatsApp não devem ser convertidos em dígitos de telefone
+  if (trimmedA.includes('@lid') || trimmedB.includes('@lid')) {
+    return trimmedA === trimmedB;
+  }
+
+  const da = cleanPhoneDigits(trimmedA);
+  const db = cleanPhoneDigits(trimmedB);
   if (!da || !db) return false;
   if (da === db) return true;
 
@@ -53,20 +62,24 @@ export function isSamePhone(a?: string | null, b?: string | null): boolean {
 
   if (coreA === coreB) return true;
 
-  // Compara DDD + últimos 8 dígitos (ignora nono dígito se um tiver e outro não)
+  // Se ambos têm DDD (10 ou 11 dígitos):
   if (coreA.length >= 10 && coreB.length >= 10) {
     const dddA = coreA.slice(0, 2);
     const dddB = coreB.slice(0, 2);
-    if (dddA === dddB) {
-      const last8A = coreA.slice(-8);
-      const last8B = coreB.slice(-8);
-      if (last8A === last8B) return true;
+    // Se o DDD for DIFERENTE, NUNCA são o mesmo telefone!
+    if (dddA !== dddB) {
+      return false;
     }
+    // Com o mesmo DDD, compara os 8 dígitos finais (ignora presença/ausência do nono dígito)
+    return coreA.slice(-8) === coreB.slice(-8);
   }
 
-  // Fallback para os últimos 8 dígitos gerais
-  if (da.length >= 8 && db.length >= 8 && da.slice(-8) === db.slice(-8)) {
-    return true;
+  // Se um número tem apenas 8 ou 9 dígitos locais e o outro tem DDD completo:
+  if ((coreA.length === 8 || coreA.length === 9) && coreB.length >= 10) {
+    return coreA.slice(-8) === coreB.slice(-8);
+  }
+  if ((coreB.length === 8 || coreB.length === 9) && coreA.length >= 10) {
+    return coreB.slice(-8) === coreA.slice(-8);
   }
 
   return false;
