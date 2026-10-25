@@ -1097,10 +1097,9 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 	hasStoreID := appManager.client != nil && appManager.client.Store != nil && appManager.client.Store.ID != nil
 	loggedIn := connected && appManager.client.IsLoggedIn() && hasStoreID
 
-	// Auto-recuperação imediata: se não está logado, garante início/reset do ciclo de QR Code
-	if !loggedIn && appManager.client != nil {
-		needsReset := hasStoreID || qrB64 == ""
-		go appManager.startPairing(needsReset)
+	// Inicia pareamento somente se não estiver logado, não tiver QR ativo e não estiver em processo de autenticação
+	if !loggedIn && qrB64 == "" && !hasStoreID && appManager.client != nil {
+		go appManager.startPairing(false)
 	}
 
 	// Se a requisição pedir JSON
@@ -1867,7 +1866,7 @@ func (s *ServiceManager) startPairing(reset bool) {
 		cli := s.client
 		s.pairMu.Unlock()
 
-		if cli == nil || reset || (cli.Store != nil && cli.Store.ID != nil && !cli.IsLoggedIn()) {
+		if cli == nil || reset {
 			s.newClient()
 			s.pairMu.Lock()
 			cli = s.client
@@ -1875,9 +1874,19 @@ func (s *ServiceManager) startPairing(reset bool) {
 			reset = false
 		}
 
-		if cli.IsConnected() && cli.IsLoggedIn() && cli.Store != nil && cli.Store.ID != nil {
-			log.Println("✅ [QR Code] WhatsApp já está conectado e autenticado.")
-			return
+		// Se o aparelho já possui credenciais salvas, conecta e aguarda handshake
+		if cli.Store != nil && cli.Store.ID != nil {
+			if !cli.IsConnected() {
+				_ = cli.Connect()
+			}
+			for i := 0; i < 6; i++ {
+				if cli.IsConnected() && cli.IsLoggedIn() {
+					log.Printf("✅ [QR Code] WhatsApp já está conectado e autenticado! JID: %s", cli.Store.ID)
+					s.clearQR()
+					return
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
 		}
 		if cli.IsConnected() {
 			cli.Disconnect()
@@ -1885,6 +1894,14 @@ func (s *ServiceManager) startPairing(reset bool) {
 
 		qrChan, err := cli.GetQRChannel(s.ctx)
 		if err != nil {
+			if cli.Store != nil && cli.Store.ID != nil {
+				_ = cli.Connect()
+				if cli.IsLoggedIn() {
+					log.Printf("✅ [QR Code] Aparelho já pareado! Conexão ativa.")
+					s.clearQR()
+					return
+				}
+			}
 			log.Printf("⚠️ [QR Code] Falha ao abrir canal de QR: %v. Recriando cliente limpo...", err)
 			s.newClient()
 			time.Sleep(1 * time.Second)
@@ -1928,7 +1945,15 @@ func (s *ServiceManager) startPairing(reset bool) {
 			}
 		}
 
-		// Se o canal expirou ou fechou sem login, desconecta e abre novo canal limpo
+		// Verifica se o canal fechou porque o pareamento foi concluído com sucesso
+		time.Sleep(1 * time.Second)
+		if cli.IsLoggedIn() || (cli.Store != nil && cli.Store.ID != nil) {
+			log.Println("🎉 [QR Code] Pareamento confirmado! Sessão preservada e ativa.")
+			s.clearQR()
+			return
+		}
+
+		// Se expirou sem pareamento nenhum, desconecta e abre novo canal limpo
 		cli.Disconnect()
 		s.newClient()
 		time.Sleep(500 * time.Millisecond)
