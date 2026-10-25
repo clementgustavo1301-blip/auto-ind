@@ -196,7 +196,7 @@ export async function getRecentQualifiedAlerts(): Promise<QualifiedLeadAlertPayl
  * Dispara alerta de Lead Qualificado (Web Push para barra do celular + Pop-up em tempo real no app)
  */
 export async function notifyLeadQualified(
-  lead: Pick<AutomationLead, 'phone' | 'company_name' | 'city' | 'segment' | 'qualification_notes'>,
+  lead: Partial<AutomationLead> & Pick<AutomationLead, 'phone'>,
   customNote?: string,
   isTest = false
 ): Promise<{ pushedCount: number; alert: QualifiedLeadAlertPayload }> {

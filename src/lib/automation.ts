@@ -982,16 +982,20 @@ export function calculateNextDispatchSchedule(
     };
   }
 
-  // 4. Limite Diário Atingido
+  // 4. Limite Diário Atingido (Disparos completos OU cota de mineração diária esgotada com fila vazia)
   const dailyTarget = settings.daily_limit || 10;
-  if (metrics.dispatchedToday >= dailyTarget) {
+  if (metrics.dispatchedToday >= dailyTarget || (pendingLeads.length === 0 && metrics.minedToday >= dailyTarget)) {
     const { diffSec, scheduledIso } = getSecondsUntilNextBrazilHour(settings.start_hour, true);
+    const reasonText = metrics.dispatchedToday >= dailyTarget
+      ? `Meta diária de ${dailyTarget} disparos atingida hoje (${metrics.dispatchedToday}/${dailyTarget}). Os ${pendingLeads.length} leads restantes na fila ficam para amanhã às ${settings.start_hour}.`
+      : `Cota diária de ${dailyTarget} leads minerados já atingida hoje (${metrics.minedToday}/${dailyTarget}). Fila vazia. Próxima mineração amanhã às ${settings.start_hour}.`;
+
     return {
       status: 'limit_reached',
       scheduled_at: scheduledIso,
       formatted_time: `Amanhã às ${settings.start_hour}`,
       countdown_seconds: diffSec,
-      reason: `Meta diária de ${dailyTarget} mensagens atingida hoje. Próximo ciclo amanhã às ${settings.start_hour}.`,
+      reason: reasonText,
       is_window_active: false,
       next_lead: nextLead,
       currently_typing: null
@@ -1035,18 +1039,24 @@ export function calculateNextDispatchSchedule(
     }
   }
 
-  // 6. Fila Vazia (intervalo já cumprido -> pronto para minerar os 10 leads do dia e disparar)
+  // 6. Fila Vazia (intervalo já cumprido -> verifica necessidade de mineração para completar a meta diária)
   if (pendingLeads.length === 0) {
-    return {
-      status: 'queue_empty',
-      scheduled_at: now.toISOString(),
-      formatted_time: 'Minerando leads...',
-      countdown_seconds: 0,
-      reason: `Fila de leads vazia. O robô minerará automaticamente até ${dailyTarget - metrics.dispatchedToday} leads no Google para disparar.`,
-      is_window_active: true,
-      next_lead: null,
-      currently_typing: null
-    };
+    const remainingMiningQuota = Math.max(0, dailyTarget - metrics.minedToday);
+    const deficitForToday = Math.max(0, dailyTarget - metrics.dispatchedToday);
+    const neededToMine = Math.min(deficitForToday, remainingMiningQuota);
+
+    if (neededToMine > 0) {
+      return {
+        status: 'queue_empty',
+        scheduled_at: now.toISOString(),
+        formatted_time: 'Minerando leads...',
+        countdown_seconds: 0,
+        reason: `Fila de leads vazia. O robô minerará exatamente ${neededToMine} leads no Google para completar a meta diária de ${dailyTarget}/dia.`,
+        is_window_active: true,
+        next_lead: null,
+        currently_typing: null
+      };
+    }
   }
 
   // 7. Pronto para disparar imediatamente
@@ -1192,7 +1202,7 @@ async function executeAutomationCycleInternal(options: {
   if (!force && metrics.dispatchedToday >= dailyTarget) {
     return { 
       executed: false, 
-      message: `Limite diário atingido (${metrics.dispatchedToday}/${dailyTarget} disparos hoje). Próximos disparos amanhã.` 
+      message: `Limite diário atingido (${metrics.dispatchedToday}/${dailyTarget} disparos hoje). Os leads pendentes da fila ficam reservados para os próximos dias.` 
     };
   }
 
@@ -1200,14 +1210,22 @@ async function executeAutomationCycleInternal(options: {
   let pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
   let searchedCount = 0;
 
-  // 4. Mineração automática para garantir os 10 leads do dia quando a fila estiver vazia
-  const remainingQuotaToday = Math.max(0, dailyTarget - metrics.dispatchedToday);
+  // 4. Mineração inteligente e estrita:
+  // - Verifica primeiro quantos leads já existem na fila pendente.
+  // - Se já houver leads suficientes na fila para cumprir a meta do dia (ex: 20 na fila para meta de 10), NÃO minera!
+  //   Usa apenas 10 hoje e os 10 restantes ficam na fila para os próximos dias.
+  // - Se faltar leads para a meta diária (ex: fila tem 5 para meta de 10), minera APENAS a diferença exata (5 leads),
+  //   respeitando o teto de leads minerados por dia (daily_limit).
+  const totalCoveredForToday = metrics.dispatchedToday + pendingLeads.length;
+  const deficitForToday = Math.max(0, dailyTarget - totalCoveredForToday);
+  const remainingMiningQuota = Math.max(0, dailyTarget - metrics.minedToday);
+  const targetBatchSize = Math.min(deficitForToday, remainingMiningQuota);
+
   const lastEmptySearchAt = gAuto.__lastEmptySearchTimestamp || 0;
   const canSearchNow = force || (Date.now() - lastEmptySearchAt >= 60000);
 
-  if (pendingLeads.length === 0 && !skipSearch && !targetLeadId && (remainingQuotaToday > 0 || force) && canSearchNow) {
+  if (targetBatchSize > 0 && !skipSearch && !targetLeadId && canSearchNow) {
     try {
-      const targetBatchSize = force && remainingQuotaToday === 0 ? 10 : Math.min(10, Math.max(1, remainingQuotaToday));
       const segments = settings.target_segments.length > 0 
         ? settings.target_segments 
         : DEFAULT_AUTOMATION_SETTINGS.target_segments;
@@ -1219,7 +1237,7 @@ async function executeAutomationCycleInternal(options: {
       const freshLeadsToInsert: AutomationLead[] = [];
       const triedCombinations = new Set<string>();
 
-      // Tenta até 3 combinações de segmento/cidade para atingir os 10 leads do dia
+      // Tenta até 3 combinações de segmento/cidade para atingir exatamente a quantidade necessária
       for (let attempt = 0; attempt < 3 && freshLeadsToInsert.length < targetBatchSize; attempt++) {
         const chosenSegment = segments[Math.floor(Math.random() * segments.length)];
         const chosenCity = cities[Math.floor(Math.random() * cities.length)];
@@ -1229,7 +1247,7 @@ async function executeAutomationCycleInternal(options: {
         }
         triedCombinations.add(comboKey);
 
-        await addAutomationLog('search', `🔍 Minerando leads no Google (${freshLeadsToInsert.length}/${targetBatchSize}): "${chosenSegment}" em "${chosenCity}"...`);
+        await addAutomationLog('search', `🔍 Minerando leads no Google (${freshLeadsToInsert.length}/${targetBatchSize}): "${chosenSegment}" em "${chosenCity}" (necessários para completar meta diária de ${dailyTarget}/dia)...`);
 
         const serpResult = await scrapeSerpAPI(chosenSegment, chosenCity, 'Brasil');
         const validLeads = await filterLeadsWithWhatsApp(serpResult.leads);
@@ -1267,7 +1285,7 @@ async function executeAutomationCycleInternal(options: {
         inMemoryLeads = [...freshLeadsToInsert, ...inMemoryLeads];
         await saveLeadsToSupabaseWithRetry(freshLeadsToInsert);
 
-        await addAutomationLog('search', `✅ ${searchedCount} novos leads qualificados e enfileirados para a meta diária (${dailyTarget}/dia).`);
+        await addAutomationLog('search', `✅ ${searchedCount} leads minerados com sucesso (fila: ${pendingLeads.length + searchedCount} pendentes, ${metrics.minedToday + searchedCount}/${dailyTarget} minerados hoje).`);
         leads = await getAutomationLeads();
         pendingLeads = leads.filter(l => l.status === 'pending' && !isBlacklistedPhone(l.phone));
         metrics = await getAutomationMetrics();
@@ -1288,8 +1306,10 @@ async function executeAutomationCycleInternal(options: {
       executed: searchedCount > 0,
       actionTaken: searchedCount > 0 ? 'searched_only' : 'idle',
       message: searchedCount > 0 
-        ? `Busca realizada com sucesso (${searchedCount} leads), mas nenhum pronto para disparo imediato.` 
-        : 'Fila de leads pendentes vazia no momento.'
+        ? `Busca realizada com sucesso (${searchedCount} leads minerados), aguardando janela/intervalo anti-ban para disparo.` 
+        : (metrics.minedToday >= dailyTarget 
+            ? `Cota diária de ${dailyTarget} leads minerados já atingida hoje (${metrics.minedToday}/${dailyTarget}). Próxima mineração amanhã.`
+            : 'Fila de leads pendentes vazia no momento.')
     };
   }
 

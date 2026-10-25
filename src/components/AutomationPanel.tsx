@@ -1104,7 +1104,15 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
               </span>
               <span className="text-zinc-700">•</span>
               <span>
-                Hoje: <strong className="text-emerald-400 font-mono">{leadsDispatchedToday}/{dailyQuota} leads disparados</strong>
+                Disparos Hoje: <strong className="text-emerald-400 font-mono">{leadsDispatchedToday}/{dailyQuota}</strong>
+              </span>
+              <span className="text-zinc-700">•</span>
+              <span>
+                Fila: <strong className="text-cyan-400 font-mono">{pendingCount} pendentes</strong>
+              </span>
+              <span className="text-zinc-700">•</span>
+              <span>
+                Minerados Hoje: <strong className="text-amber-300 font-mono">{metrics?.minedToday || 0}/{dailyQuota}</strong>
               </span>
             </div>
           </div>
