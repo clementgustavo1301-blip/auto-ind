@@ -532,9 +532,29 @@ export async function processIncomingWhatsAppMessage(
   const currentLead: AutomationLead = lead;
 
   const settings = await getAutomationSettings();
+
+  // 0. Se o robô estiver pausado pelo operador (is_active: false), a IA NÃO envia mensagens automáticas!
+  if (!settings.is_active) {
+    console.log(`[AI SDR] ⏸️ Robô pausado pelo operador. Mensagem de ${currentLead.company_name} salva no chat, mas a IA NÃO responde em modo pausa.`);
+    await updateAutomationLead(targetPhone, {
+      last_reply_at: nowIso,
+      status: 'chatting'
+    });
+    await addAutomationLog(
+      'reply',
+      `💬 Resposta recebida de ${currentLead.company_name} (${targetPhone}): "${trimmedText.slice(0, 80)}" (Robô Pausado - IA em repouso)`,
+      targetPhone
+    );
+    return {
+      success: true,
+      replied: false,
+      lead: { ...currentLead, status: 'chatting', last_reply_at: nowIso }
+    };
+  }
+
   const history = await getAutomationMessages(targetPhone);
 
-  // 0. Se o lead já é qualificado ou está em human_takeover, a IA NÃO responde nada!
+  // 0.1 Se o lead já é qualificado ou está em human_takeover, a IA NÃO responde nada!
   if (currentLead.status === 'qualified' || currentLead.human_takeover) {
     console.log(`[AI SDR] Lead ${currentLead.company_name} (${targetPhone}) já está QUALIFICADO. IA em silêncio absoluto para o Gustavo.`);
     await addAutomationLog(

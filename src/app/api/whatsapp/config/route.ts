@@ -14,9 +14,12 @@ export async function GET() {
         { status: 502 }
       );
     }
-    if (metrics && typeof metrics.dispatchedToday === 'number' && config.sent_today > metrics.dispatchedToday) {
-      config.sent_today = metrics.dispatchedToday;
-      updateWhatsAppConfig({ sent_today: metrics.dispatchedToday }).catch(() => {});
+    if (metrics && typeof metrics.dispatchedToday === 'number') {
+      const effectiveSentToday = Math.max(metrics.dispatchedToday, config.sent_today || 0);
+      if (config.sent_today < effectiveSentToday) {
+        updateWhatsAppConfig({ sent_today: effectiveSentToday }).catch(() => {});
+      }
+      config.sent_today = effectiveSentToday;
     }
     return NextResponse.json(config);
   } catch (error: any) {

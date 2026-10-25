@@ -389,7 +389,19 @@ export async function getAutomationLeads(): Promise<AutomationLead[]> {
           .order('created_at', { ascending: false });
 
         if (!error && data) {
-          inMemoryLeads = (data as AutomationLead[]).filter(l => !isBlacklistedPhone(l.phone) && !isWhatsAppGroup(l.phone));
+          const existingMap = new Map(inMemoryLeads.map(l => [cleanPhoneDigits(l.phone), l]));
+          inMemoryLeads = (data as AutomationLead[])
+            .filter(l => !isBlacklistedPhone(l.phone) && !isWhatsAppGroup(l.phone))
+            .map(l => {
+              const digits = cleanPhoneDigits(l.phone);
+              const prev = existingMap.get(digits);
+              // Preserva dispatched_at mesmo se a tabela do Supabase ainda não tiver a coluna
+              const effectiveDispatchedAt = l.dispatched_at || prev?.dispatched_at || (l.status !== 'pending' ? (prev?.dispatched_at || (l as any).updated_at || l.created_at) : undefined);
+              return {
+                ...l,
+                dispatched_at: effectiveDispatchedAt
+              };
+            });
           return inMemoryLeads;
         }
       } catch {
@@ -1218,7 +1230,50 @@ export async function getAutomationMetrics(): Promise<AutomationMetrics> {
   const todayStr = getBrazilDateParts().dateStr;
 
   const minedToday = leads.filter(l => isSameBrazilDay(l.created_at, todayStr)).length;
-  const dispatchedToday = leads.filter(l => isSameBrazilDay(l.dispatched_at, todayStr)).length;
+
+  // Conjunto único de telefones de leads que foram disparados hoje (1 Lead = 1 Disparo)
+  // Permanece contabilizado como disparo mesmo que o lead responda (status: 'chatting') ou seja qualificado ('qualified')
+  const dispatchedPhones = new Set<string>();
+
+  // 1. Leads com dispatched_at registrado para hoje (qualquer status exceto pending)
+  for (const l of leads) {
+    if (l.dispatched_at && isSameBrazilDay(l.dispatched_at, todayStr)) {
+      dispatchedPhones.add(cleanPhoneDigits(l.phone));
+    }
+  }
+
+  // 2. Leads que saíram da fila (não estão mais pendentes) e tiveram atividade/criação/resposta hoje
+  for (const l of leads) {
+    if (l.status !== 'pending') {
+      const createdToday = isSameBrazilDay(l.created_at, todayStr);
+      const repliedToday = l.last_reply_at && isSameBrazilDay(l.last_reply_at, todayStr);
+      const updatedToday = (l as any).updated_at && isSameBrazilDay((l as any).updated_at, todayStr);
+      if (l.dispatched_at) {
+        if (isSameBrazilDay(l.dispatched_at, todayStr)) {
+          dispatchedPhones.add(cleanPhoneDigits(l.phone));
+        }
+      } else if (createdToday || repliedToday || updatedToday) {
+        dispatchedPhones.add(cleanPhoneDigits(l.phone));
+      }
+    }
+  }
+
+  // 3. Global set em memória de disparos realizados no processo
+  if (gAuto.__dispatchedTodayDate === todayStr && gAuto.__dispatchedTodayPhones instanceof Set) {
+    for (const phone of gAuto.__dispatchedTodayPhones) {
+      if (phone) dispatchedPhones.add(cleanPhoneDigits(phone));
+    }
+  }
+
+  // 4. Logs de disparo registrados hoje
+  for (const log of inMemoryLogs) {
+    if (log.event_type === 'dispatch' && log.lead_phone && isSameBrazilDay(log.created_at, todayStr)) {
+      dispatchedPhones.add(cleanPhoneDigits(log.lead_phone));
+    }
+  }
+
+  const dispatchedToday = dispatchedPhones.size;
+
   // Considera resposta se tem data de resposta hoje OU se o status foi alterado para em conversa/qualificado
   const repliesToday = leads.filter(l => {
     const hasReplyDateToday = isSameBrazilDay(l.last_reply_at, todayStr);
@@ -1543,6 +1598,14 @@ async function executeAutomationCycleInternal(options: {
 
     if (sendResult.success || sendResult.queued) {
       gAuto.__lastFailedDispatchTimestamp = 0;
+
+      const todayStr = getBrazilDateParts().dateStr;
+      if (gAuto.__dispatchedTodayDate !== todayStr || !(gAuto.__dispatchedTodayPhones instanceof Set)) {
+        gAuto.__dispatchedTodayDate = todayStr;
+        gAuto.__dispatchedTodayPhones = new Set<string>();
+      }
+      gAuto.__dispatchedTodayPhones.add(cleanPhoneDigits(nextLead.phone));
+
       const rec = await recordDispatchSchedule(nextLead.phone, nextLead.company_name, settings);
       await addAutomationLog('dispatch', `✅ Disparo ${metrics.dispatchedToday + 1}/${dailyTarget} efetuado com sucesso para ${nextLead.company_name}. Próximo disparo agendado para daqui a ${rec.interval_mins} min (${rec.next_scheduled_at.slice(11, 16)}).`, nextLead.phone);
 
@@ -1554,6 +1617,9 @@ async function executeAutomationCycleInternal(options: {
       };
     } else {
       gAuto.__lastFailedDispatchTimestamp = Date.now();
+      if (gAuto.__dispatchedTodayPhones instanceof Set) {
+        gAuto.__dispatchedTodayPhones.delete(cleanPhoneDigits(nextLead.phone));
+      }
       nextLead.status = 'pending';
       nextLead.dispatched_at = undefined;
       await updateAutomationLead(nextLead.phone, {
@@ -1568,6 +1634,9 @@ async function executeAutomationCycleInternal(options: {
     }
   } catch (sendErr: any) {
     gAuto.__lastFailedDispatchTimestamp = Date.now();
+    if (gAuto.__dispatchedTodayPhones instanceof Set) {
+      gAuto.__dispatchedTodayPhones.delete(cleanPhoneDigits(nextLead.phone));
+    }
     nextLead.status = 'pending';
     nextLead.dispatched_at = undefined;
     await updateAutomationLead(nextLead.phone, {

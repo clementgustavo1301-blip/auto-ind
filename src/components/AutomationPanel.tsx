@@ -1147,7 +1147,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             {leadsDispatchedToday} <span className="text-xs text-zinc-500 font-normal">/ {dailyQuota}</span>
           </div>
           <div className="text-[10px] font-mono text-zinc-500 mt-1 flex items-center justify-between gap-1">
-            <span>1 lead = 1 disparo ({sentWaitCount} aguard.)</span>
+            <span>{totalRepliedCount} já responderam ({sentWaitCount} aguardando)</span>
           </div>
         </button>
 
@@ -1305,7 +1305,7 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             {[
               { id: 'all', label: 'Todos', count: leads.length },
               { id: 'pending', label: 'Na Fila', count: pendingCount },
-              { id: 'sent', label: 'Disparados', count: sentWaitCount },
+              { id: 'sent', label: 'Aguardando Resposta', count: sentWaitCount },
               { id: 'chatting', label: '💬 Em Conversa', count: chattingCount },
               { id: 'qualified', label: '🔥 Qualificados', count: qualifiedCount },
               { id: 'disqualified', label: 'Sem Interesse', count: disqualifiedCount }

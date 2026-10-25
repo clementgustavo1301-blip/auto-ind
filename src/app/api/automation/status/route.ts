@@ -38,11 +38,18 @@ export async function GET(request: Request) {
       loadPersistedDispatchSchedule().catch(() => null)
     ]);
 
-    // Garante estritamente 1 Lead = 1 Disparo: se o microserviço Go contou múltiplos balões do mesmo lead, sincroniza com dispatchedToday
-    if (waStatus && typeof metrics?.dispatchedToday === 'number' && waStatus.sent_today > metrics.dispatchedToday) {
-      waStatus.sent_today = metrics.dispatchedToday;
-      waStatus.limit_reached = metrics.dispatchedToday >= (settings?.daily_limit || waStatus.daily_limit || 15);
-      updateWhatsAppConfig({ sent_today: metrics.dispatchedToday }).catch(() => {});
+    // Garante estritamente 1 Lead = 1 Disparo: sincroniza a contagem entre Go e Next.js sem zerar acidentalmente disparos reais
+    const effectiveDispatchedToday = Math.max(metrics?.dispatchedToday || 0, waStatus?.sent_today || 0);
+    if (metrics) {
+      metrics.dispatchedToday = effectiveDispatchedToday;
+    }
+    if (waStatus) {
+      const dailyLimit = settings?.daily_limit || waStatus.daily_limit || 10;
+      if (waStatus.sent_today < effectiveDispatchedToday) {
+        updateWhatsAppConfig({ sent_today: effectiveDispatchedToday }).catch(() => {});
+      }
+      waStatus.sent_today = effectiveDispatchedToday;
+      waStatus.limit_reached = effectiveDispatchedToday >= dailyLimit;
     }
 
     // Se o microserviço Go estiver digitando ativamente para alguém na fila, sincroniza com o estado global
