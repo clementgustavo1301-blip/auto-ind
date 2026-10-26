@@ -47,6 +47,34 @@ import {
 import { formatPhoneDisplay, isSamePhone } from '@/lib/phone';
 import { soundEngine } from '@/lib/sound-effects';
 import { AUTOMATION_PROFILES } from '@/lib/automationProfiles';
+
+export type DateFilterType = 'today' | 'yesterday' | '7days' | 'all' | 'custom';
+
+// Extrai data em formato local YYYY-MM-DD
+function getLocalDateString(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Retorna o marco temporal mais recente do lead (atividade/disparo com fallback para cadastro)
+function getLeadEffectiveDate(lead: AutomationLead): string | null {
+  const timestamps: number[] = [];
+  if (lead.last_reply_at) {
+    const t = new Date(lead.last_reply_at).getTime();
+    if (!isNaN(t)) timestamps.push(t);
+  }
+  if (lead.dispatched_at) {
+    const t = new Date(lead.dispatched_at).getTime();
+    if (!isNaN(t)) timestamps.push(t);
+  }
+  if (timestamps.length > 0) {
+    return new Date(Math.max(...timestamps)).toISOString();
+  }
+  return lead.created_at || null;
+}
+
 export interface CopywritingPreset {
   id: string;
   category: string;
@@ -212,6 +240,10 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
 
   // Filtro de status do Kanban
   const [activeKanbanTab, setActiveKanbanTab] = useState<AutomationLeadStatus | 'all'>('all');
+
+  // Filtro de data / dia do Kanban (Padrão: Hoje)
+  const [activeDateFilter, setActiveDateFilter] = useState<DateFilterType>('today');
+  const [customFilterDate, setCustomFilterDate] = useState<string>('');
 
   // Rascunho das configurações gerais para edição
   const [editSettings, setEditSettings] = useState<AutomationSettings | null>(null);
@@ -772,6 +804,75 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     }
   };
 
+  // Marcos de data para filtro temporal
+  const todayStr = useMemo(() => getLocalDateString(new Date()), []);
+  const yesterdayStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return getLocalDateString(d);
+  }, []);
+  const sevenDaysAgoStart = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }, []);
+
+  // Critério de filtro por dia / período
+  const matchesDateFilter = useCallback((lead: AutomationLead, filter: DateFilterType, customDate: string) => {
+    if (filter === 'all') return true;
+
+    const raw = getLeadEffectiveDate(lead);
+    if (!raw) return false;
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return false;
+    const leadDateStr = getLocalDateString(d);
+
+    if (filter === 'today') {
+      return leadDateStr === todayStr;
+    }
+    if (filter === 'yesterday') {
+      return leadDateStr === yesterdayStr;
+    }
+    if (filter === '7days') {
+      return d.getTime() >= sevenDaysAgoStart;
+    }
+    if (filter === 'custom') {
+      if (!customDate) return true;
+      return leadDateStr === customDate;
+    }
+    return true;
+  }, [todayStr, yesterdayStr, sevenDaysAgoStart]);
+
+  // Contadores de leads por dia/período
+  const dateCounts = useMemo(() => {
+    let today = 0;
+    let yesterday = 0;
+    let sevenDays = 0;
+    for (const l of leads) {
+      const raw = getLeadEffectiveDate(l);
+      if (!raw) continue;
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) continue;
+      const str = getLocalDateString(d);
+      if (str === todayStr) today++;
+      if (str === yesterdayStr) yesterday++;
+      if (d.getTime() >= sevenDaysAgoStart) sevenDays++;
+    }
+    return {
+      today,
+      yesterday,
+      sevenDays,
+      all: leads.length
+    };
+  }, [leads, todayStr, yesterdayStr, sevenDaysAgoStart]);
+
+  // Leads filtrados pela data selecionada (Padrão: Hoje)
+  const leadsFilteredByDate = useMemo(
+    () => leads.filter(lead => matchesDateFilter(lead, activeDateFilter, customFilterDate)),
+    [leads, activeDateFilter, customFilterDate, matchesDateFilter]
+  );
+
   // Critério unificado de estágios do pipeline (garante 100% de consistência entre os cards, badges e abas)
   const matchesKanbanStage = useCallback((lead: AutomationLead, stage: AutomationLeadStatus | 'all') => {
     if (stage === 'all') return true;
@@ -789,17 +890,18 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
     return lead.status === stage;
   }, []);
 
+  // Leads finais exibidos (Filtro de Data + Filtro de Estágio do Kanban)
   const filteredLeads = useMemo(
-    () => leads.filter(lead => matchesKanbanStage(lead, activeKanbanTab)),
-    [leads, activeKanbanTab, matchesKanbanStage]
+    () => leadsFilteredByDate.filter(lead => matchesKanbanStage(lead, activeKanbanTab)),
+    [leadsFilteredByDate, activeKanbanTab, matchesKanbanStage]
   );
 
-  // Contadores consolidados em tempo real (1 Lead = 1 Disparo)
-  const pendingCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'pending')).length, [leads, matchesKanbanStage]);
-  const sentWaitCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'sent')).length, [leads, matchesKanbanStage]);
-  const chattingCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'chatting')).length, [leads, matchesKanbanStage]);
-  const qualifiedCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'qualified')).length, [leads, matchesKanbanStage]);
-  const disqualifiedCount = useMemo(() => leads.filter(l => matchesKanbanStage(l, 'disqualified')).length, [leads, matchesKanbanStage]);
+  // Contadores consolidados em tempo real sincronizados com o período selecionado
+  const pendingCount = useMemo(() => leadsFilteredByDate.filter(l => matchesKanbanStage(l, 'pending')).length, [leadsFilteredByDate, matchesKanbanStage]);
+  const sentWaitCount = useMemo(() => leadsFilteredByDate.filter(l => matchesKanbanStage(l, 'sent')).length, [leadsFilteredByDate, matchesKanbanStage]);
+  const chattingCount = useMemo(() => leadsFilteredByDate.filter(l => matchesKanbanStage(l, 'chatting')).length, [leadsFilteredByDate, matchesKanbanStage]);
+  const qualifiedCount = useMemo(() => leadsFilteredByDate.filter(l => matchesKanbanStage(l, 'qualified')).length, [leadsFilteredByDate, matchesKanbanStage]);
+  const disqualifiedCount = useMemo(() => leadsFilteredByDate.filter(l => matchesKanbanStage(l, 'disqualified')).length, [leadsFilteredByDate, matchesKanbanStage]);
   const totalRepliedCount = chattingCount + qualifiedCount;
   const leadsDispatchedToday = metrics?.dispatchedToday ?? 0;
   const dailyQuota = settings?.daily_limit || 10;
@@ -1256,8 +1358,26 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-[#E5FF00] shrink-0" />
-              <h3 className="font-mono text-xs sm:text-sm font-black uppercase tracking-wider text-zinc-100">
-                Pipeline de Leads da Automação ({leads.length})
+              <h3 className="font-mono text-xs sm:text-sm font-black uppercase tracking-wider text-zinc-100 flex items-center gap-2 flex-wrap">
+                <span>Pipeline de Leads</span>
+                <span className="text-[11px] font-normal text-zinc-400">
+                  ({leadsFilteredByDate.length}{activeDateFilter !== 'all' ? ` de ${leads.length} total` : ''})
+                </span>
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 border uppercase ${
+                  activeDateFilter === 'today'
+                    ? 'bg-[#E5FF00]/10 text-[#E5FF00] border-[#E5FF00]/30'
+                    : 'bg-zinc-800 text-zinc-300 border-zinc-700'
+                }`}>
+                  {activeDateFilter === 'today'
+                    ? 'Hoje'
+                    : activeDateFilter === 'yesterday'
+                    ? 'Ontem'
+                    : activeDateFilter === '7days'
+                    ? 'Últimos 7 dias'
+                    : activeDateFilter === 'custom'
+                    ? `Data: ${customFilterDate}`
+                    : 'Todas as datas'}
+                </span>
               </h3>
             </div>
 
@@ -1300,10 +1420,144 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
             </div>
           </div>
 
+          {/* BARRA DE FILTRO POR DATA / DIA (PADRÃO HOJE COM ATALHOS E CALENDÁRIO) */}
+          <div className="bg-zinc-900 border-2 border-zinc-800 p-2 sm:p-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <div className="flex items-center gap-1 mr-1 text-zinc-400 font-mono text-[10px] font-bold uppercase tracking-wider shrink-0">
+                <Calendar className="w-3.5 h-3.5 text-[#E5FF00]" />
+                <span>Dia / Período:</span>
+              </div>
+
+              {/* Hoje */}
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playMechanicalClick('secondary');
+                  setActiveDateFilter('today');
+                }}
+                className={`px-2.5 py-1 font-mono text-[11px] font-bold uppercase border transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeDateFilter === 'today'
+                    ? 'bg-[#E5FF00] text-zinc-950 border-[#E5FF00] font-black shadow-[2px_2px_0_0_#000]'
+                    : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+                title="Filtrar leads com atividade hoje"
+              >
+                <span>Hoje</span>
+                <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${
+                  activeDateFilter === 'today' ? 'bg-zinc-950 text-[#E5FF00]' : 'bg-zinc-800 text-zinc-400'
+                }`}>
+                  {dateCounts.today}
+                </span>
+              </button>
+
+              {/* Ontem */}
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playMechanicalClick('secondary');
+                  setActiveDateFilter('yesterday');
+                }}
+                className={`px-2.5 py-1 font-mono text-[11px] font-bold uppercase border transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeDateFilter === 'yesterday'
+                    ? 'bg-[#E5FF00] text-zinc-950 border-[#E5FF00] font-black shadow-[2px_2px_0_0_#000]'
+                    : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+                title="Filtrar leads com atividade ontem"
+              >
+                <span>Ontem</span>
+                <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${
+                  activeDateFilter === 'yesterday' ? 'bg-zinc-950 text-[#E5FF00]' : 'bg-zinc-800 text-zinc-400'
+                }`}>
+                  {dateCounts.yesterday}
+                </span>
+              </button>
+
+              {/* Últimos 7 dias */}
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playMechanicalClick('secondary');
+                  setActiveDateFilter('7days');
+                }}
+                className={`px-2.5 py-1 font-mono text-[11px] font-bold uppercase border transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeDateFilter === '7days'
+                    ? 'bg-[#E5FF00] text-zinc-950 border-[#E5FF00] font-black shadow-[2px_2px_0_0_#000]'
+                    : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+                title="Filtrar leads dos últimos 7 dias"
+              >
+                <span>7 Dias</span>
+                <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${
+                  activeDateFilter === '7days' ? 'bg-zinc-950 text-[#E5FF00]' : 'bg-zinc-800 text-zinc-400'
+                }`}>
+                  {dateCounts.sevenDays}
+                </span>
+              </button>
+
+              {/* Todos */}
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playMechanicalClick('secondary');
+                  setActiveDateFilter('all');
+                }}
+                className={`px-2.5 py-1 font-mono text-[11px] font-bold uppercase border transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeDateFilter === 'all'
+                    ? 'bg-[#E5FF00] text-zinc-950 border-[#E5FF00] font-black shadow-[2px_2px_0_0_#000]'
+                    : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+                title="Todos os leads cadastrados"
+              >
+                <span>Todos</span>
+                <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${
+                  activeDateFilter === 'all' ? 'bg-zinc-950 text-[#E5FF00]' : 'bg-zinc-800 text-zinc-400'
+                }`}>
+                  {dateCounts.all}
+                </span>
+              </button>
+            </div>
+
+            {/* Seletor de Data Específica (Calendário) */}
+            <div className="flex items-center gap-1.5 self-start md:self-auto">
+              <div className="flex items-center bg-zinc-950 border border-zinc-800 px-2 py-0.5">
+                <input
+                  type="date"
+                  value={customFilterDate}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCustomFilterDate(val);
+                    if (val) {
+                      soundEngine.playMechanicalClick('secondary');
+                      setActiveDateFilter('custom');
+                    }
+                  }}
+                  className={`font-mono text-[11px] bg-transparent text-zinc-200 focus:outline-none cursor-pointer ${
+                    activeDateFilter === 'custom' ? 'text-[#E5FF00] font-bold' : ''
+                  }`}
+                  title="Selecionar data específica no calendário"
+                />
+                {activeDateFilter === 'custom' && customFilterDate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playMechanicalClick('secondary');
+                      setCustomFilterDate('');
+                      setActiveDateFilter('today');
+                    }}
+                    className="ml-1 p-0.5 text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
+                    title="Limpar data e voltar para Hoje"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Abas de filtro do pipeline (Scroll horizontal fluido no mobile, contadores 100% sincronizados) */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap font-mono text-[11px] -mx-1 px-1">
             {[
-              { id: 'all', label: 'Todos', count: leads.length },
+              { id: 'all', label: 'Todos', count: leadsFilteredByDate.length },
               { id: 'pending', label: 'Na Fila', count: pendingCount },
               { id: 'sent', label: 'Aguardando Resposta', count: sentWaitCount },
               { id: 'chatting', label: '💬 Em Conversa', count: chattingCount },
@@ -1356,18 +1610,60 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
           {filteredLeads.length === 0 ? (
             <div className="text-center py-12 px-4 border-2 border-dashed border-zinc-800 bg-zinc-900/30 flex flex-col items-center justify-center gap-3">
               <div className="w-10 h-10 bg-zinc-800 border-2 border-zinc-700 flex items-center justify-center text-zinc-400">
-                <Layers className="w-5 h-5 text-[#E5FF00]" />
+                <Calendar className="w-5 h-5 text-[#E5FF00]" />
               </div>
               <div>
                 <h4 className="font-mono font-bold text-xs uppercase text-zinc-200">
-                  {leads.length === 0 ? 'Nenhum lead na esteira da automação ainda' : 'Nenhum lead neste estágio'}
+                  {leads.length === 0
+                    ? 'Nenhum lead na esteira da automação ainda'
+                    : leadsFilteredByDate.length === 0
+                    ? activeDateFilter === 'today'
+                      ? 'Nenhum lead com atividade registrado hoje'
+                      : activeDateFilter === 'yesterday'
+                      ? 'Nenhum lead com atividade registrado ontem'
+                      : activeDateFilter === '7days'
+                      ? 'Nenhum lead registrado nos últimos 7 dias'
+                      : activeDateFilter === 'custom'
+                      ? `Nenhum lead para a data ${customFilterDate}`
+                      : 'Nenhum lead encontrado para este período'
+                    : 'Nenhum lead neste estágio do pipeline'}
                 </h4>
-                <p className="text-[11px] font-mono text-zinc-500 mt-1 max-w-md mx-auto">
+                <p className="text-[11px] font-mono text-zinc-400 mt-1 max-w-md mx-auto">
                   {leads.length === 0
                     ? 'Execute um ciclo para minerar leads no Google ou importe os contatos das buscas.'
-                    : 'Filtre por outro estágio do pipeline ou adicione novos leads.'}
+                    : leadsFilteredByDate.length === 0
+                    ? `Existem ${leads.length} lead(s) no total em outros períodos no histórico geral.`
+                    : 'Alterne a aba de estágio ou escolha outro período no filtro de data.'}
                 </p>
               </div>
+              {leadsFilteredByDate.length === 0 && leads.length > 0 && (
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playMechanicalClick('secondary');
+                      setActiveDateFilter('all');
+                    }}
+                    className="px-3.5 py-2 bg-[#E5FF00] hover:bg-[#d8f000] text-zinc-950 font-mono text-xs font-black uppercase border-2 border-zinc-950 shadow-[2px_2px_0_0_#000] flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Ver Todos os Leads ({leads.length})</span>
+                  </button>
+                  {dateCounts.sevenDays > 0 && activeDateFilter !== '7days' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playMechanicalClick('secondary');
+                        setActiveDateFilter('7days');
+                      }}
+                      className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-xs font-bold uppercase border-2 border-zinc-700 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Calendar className="w-3.5 h-3.5" />
+                      <span>Ver Últimos 7 Dias ({dateCounts.sevenDays})</span>
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
                 {initialLeads.length > 0 && (
                   <button
@@ -1426,6 +1722,19 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
                           <span>{lead.city || 'São Paulo'}</span>
                           <span>•</span>
                           <span className="text-zinc-300">{lead.segment || 'Indústria'}</span>
+                        </div>
+                        {/* Timestamp do Lead */}
+                        <div className="flex items-center gap-1 text-[10px] font-mono text-zinc-400 mt-1">
+                          <Clock className="w-3 h-3 text-zinc-500 shrink-0" />
+                          <span>
+                            {lead.last_reply_at ? (
+                              <>Resp: <span className="text-emerald-400">{new Date(lead.last_reply_at).toLocaleDateString('pt-BR')} às {new Date(lead.last_reply_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span></>
+                            ) : lead.dispatched_at ? (
+                              <>Disp: <span className="text-sky-300">{new Date(lead.dispatched_at).toLocaleDateString('pt-BR')} às {new Date(lead.dispatched_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span></>
+                            ) : (
+                              <>Cad: <span className="text-zinc-400">{new Date(lead.created_at).toLocaleDateString('pt-BR')}</span></>
+                            )}
+                          </span>
                         </div>
                       </div>
 
