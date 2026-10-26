@@ -127,26 +127,43 @@ function analyzeHeuristic(
 ): AIQualificationResult {
   const text = incomingText.toLowerCase();
 
-  // 1. Padrões de Rejeição / Desinteresse (Desqualifica)
+  // 1. Padrões de Rejeição / Desinteresse (Desqualifica e apenas agradece/despede-se)
   const rejectionPatterns = [
     'não temos interesse', 'nao temos interesse',
     'não tenho interesse', 'nao tenho interesse',
     'sem interesse', 'não quero', 'nao quero',
+    'não precisamos', 'nao precisamos', 'não preciso', 'nao preciso',
     'não usamos', 'nao usamos', 'não utilizamos', 'nao utilizamos',
-    'já temos fornecedor', 'ja temos fornecedor',
+    'já temos fornecedor', 'ja temos fornecedor', 'já temos fornecedores', 'ja temos fornecedores',
     'já temos site', 'ja temos site', 'já temos equipe', 'ja temos equipe',
-    'já temos', 'ja temos', 'favor retirar', 'retirar meu número', 'retire meu numero',
-    'número errado', 'numero errado', 'engano', 'não obrigado', 'nao obrigado',
-    'não preciso', 'nao preciso', 'pare de mandar', 'não mande mais'
+    'já temos agência', 'ja temos agencia', 'já temos assessoria', 'ja temos assessoria',
+    'já tem alguém que faz', 'ja tem alguem que faz', 'já tem alguem que faz', 'ja tem alguém que faz',
+    'já tem alguém', 'ja tem alguem', 'já tenho alguém', 'ja tenho alguem',
+    'já tem quem faz', 'ja tem quem faz', 'já tem quem faça', 'ja tem quem faca',
+    'já tenho quem faça', 'ja tenho quem faca', 'já temos quem faça', 'ja temos quem faca',
+    'já tem pessoa que faz', 'ja tem pessoa que faz', 'já tem gente que faz', 'ja tem gente que faz',
+    'já cuidamos disso', 'ja cuidamos disso', 'já fazemos internamente', 'ja fazemos internamente',
+    'já temos quem cuide', 'ja temos quem cuide', 'já tem quem cuide', 'ja tem quem cuide',
+    'já temos alguém que cuida', 'ja temos alguem que cuida', 'já tem alguém que cuida', 'ja tem alguem que cuida',
+    'já é feito', 'ja e feito', 'já temos empresa', 'ja temos empresa',
+    'já temos', 'ja temos', 'já tenho', 'ja tenho',
+    'favor retirar', 'retirar meu número', 'retire meu numero',
+    'número errado', 'numero errado', 'engano',
+    'não obrigado', 'nao obrigado', 'não obrigada', 'nao obrigada',
+    'agradeço mas não', 'agradeco mas nao', 'obrigado mas não', 'obrigada mas não',
+    'obrigado mas ja', 'obrigado mas já', 'obrigada mas ja', 'obrigada mas já',
+    'pare de mandar', 'não mande mais'
   ];
 
   for (const pattern of rejectionPatterns) {
     if (text.includes(pattern)) {
       return {
-        replyMessage: 'Entendido! Agradeço pelo retorno e desejo muito sucesso para a equipe.',
+        replyMessage: profile === 'sergio'
+          ? 'Perfeito! Agradeço muito pelo retorno e pela atenção.\n\nSe precisarem de cotações no futuro, ficamos à disposição. Tenha um excelente dia! 🙏'
+          : 'Perfeito! Agradeço muito pelo retorno e pela atenção.\n\nQualquer coisa no futuro, estamos à disposição. Tenha um excelente dia! 🙏',
         interestLevel: 'none',
         qualificationStatus: 'disqualified',
-        notes: `Lead informou não ter interesse: "${incomingText.slice(0, 100)}"`,
+        notes: `Lead informou não ter interesse ou já possui responsável: "${incomingText.slice(0, 100)}"`,
         shouldNotifyHuman: false
       };
     }
@@ -310,8 +327,16 @@ REGRAS OBRIGATÓRIAS E RESTRITAS DE STATUS (SIGA COM RIGOR ABSOLUTO):
    - OU disser que VAI OUVIR ou pode mandar/falar (ex: "vou ouvir", "pode falar", "manda aí", "pode mandar áudio", "pode mandar", "fala aí", "vou escutar").
    - OU disser que PODE CHAMAR GUSTAVO ou pode falar com ele (ex: "pode me chamar Gustavo", "pode chamar o Gustavo", "pode chamar", "chama o Gustavo", "chama aí", "pode me chamar", "chama no zap").
    - OU disser que QUER O SERVIÇO / quer saber mais / pediu valor ou proposta (ex: "quanto custa?", "qual o valor?", "como funciona?", "quero saber mais").
-   REGRA DE OURO DO SISTEMA: Quando o lead for qualificado, a IA NÃO DEVE RESPONDER MAIS NADA ("replyMessage": ""). O lead é movido para a aba de Qualificados para o Gustavo assumir pessoalmente!
-2. "disqualified": Atribua "disqualified" (e interestLevel "none") se o lead disse que NÃO TEM INTERESSE, que não quer, que já tem fornecedor/site/equipe ou pediu para retirar o número. A resposta da IA deve ser breve, cordial e agradecendo pelo tempo.
+2. "disqualified" (REGRA CRÍTICA DE DESPEDIDA SEM INSISTÊNCIA):
+   Atribua "disqualified" (interestLevel: "none", "shouldNotifyHuman": false) IMEDIATAMENTE se o lead:
+   - Disser que NÃO QUER, NÃO TEM INTERESSE ou NÃO PRECISA (ex: "não quero", "não temos interesse", "não preciso", "obrigado mas não").
+   - OU disser que JÁ TEM ALGUÉM QUE FAZ ISSO, que já tem agência, equipe interna, parceiro, fornecedor ou responsável (ex: "já temos alguém que faz isso", "já temos agência", "já temos equipe", "já tem quem faça", "já cuidamos disso internamente").
+   - OU pedir para retirar o número ou parar de enviar mensagens.
+   
+   REGRA DE RESPOSTA AO DESQUALIFICAR (RIGOR OBRIGATÓRIO):
+   - NUNCA insista, NÃO tente contornar a objeção e NÃO faça novas perguntas!
+   - APENAS agradeça educadamente pelo retorno e se despeça cordialmente.
+   Exemplo de resposta: "Perfeito! Agradeço muito pelo retorno e pela atenção.\\n\\nQualquer coisa no futuro, estamos à disposição. Tenha um excelente dia! 🙏"
 3. "chatting": Para QUALQUER outra resposta (como saudações "olá", "bom dia", "tudo bem?", dúvidas gerais, "quem é?", "é você quem faz?"), o status DEVE ser estritamente "chatting" (interestLevel "medium"). A IA deve conduzir a conversa amigavelmente apresentando os serviços e convidando o lead a conhecer mais.
 
 DIRETRIZ DE HUMANIZAÇÃO OBRIGATÓRIA (MENSAGENS CURTAS EM BALÕES SEPARADOS):
