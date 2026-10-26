@@ -15,11 +15,8 @@ export async function GET() {
       );
     }
     if (metrics && typeof metrics.dispatchedToday === 'number') {
-      const effectiveSentToday = Math.max(metrics.dispatchedToday, config.sent_today || 0);
-      if (config.sent_today < effectiveSentToday) {
-        updateWhatsAppConfig({ sent_today: effectiveSentToday }).catch(() => {});
-      }
-      config.sent_today = effectiveSentToday;
+      config.sent_today = metrics.dispatchedToday;
+      updateWhatsAppConfig({ sent_today: metrics.dispatchedToday }).catch(() => {});
     }
     return NextResponse.json(config);
   } catch (error: any) {

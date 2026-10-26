@@ -903,7 +903,8 @@ export function AutomationPanel({ initialLeads = [], focusQualifiedPhone }: Auto
   const qualifiedCount = useMemo(() => leadsFilteredByDate.filter(l => matchesKanbanStage(l, 'qualified')).length, [leadsFilteredByDate, matchesKanbanStage]);
   const disqualifiedCount = useMemo(() => leadsFilteredByDate.filter(l => matchesKanbanStage(l, 'disqualified')).length, [leadsFilteredByDate, matchesKanbanStage]);
   const totalRepliedCount = chattingCount + qualifiedCount;
-  const leadsDispatchedToday = metrics?.dispatchedToday ?? 0;
+  // 1 Lead = 1 Disparo: sincroniza a contagem de disparos de hoje estritamente com os leads reais de hoje (garante 100% de coerência entre o card e a aba HOJE)
+  const leadsDispatchedToday = dateCounts.today > 0 ? dateCounts.today : (metrics?.dispatchedToday ?? 0);
   const dailyQuota = settings?.daily_limit || 10;
 
   return (
